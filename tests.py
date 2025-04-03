@@ -2,7 +2,7 @@
 
 import torch
 from feature_extraction import Input, move_to_device
-from model import MyModel
+from model import Model
 
 def diff(v1, v2, mask=None, atol=1e-3, rtol=1e-2):
     if mask is not None:
@@ -160,7 +160,7 @@ def check_diffusion(diff_x, true_diff_x, mask):
 def main():
     msa_shuffle_order = torch.load('tests/test_lysozyme/debug_inputs/msa_shuffle_order.pt').long()
 
-    model = MyModel(N_cycle=2, noise_steps=4)
+    model = Model(N_cycle=2, noise_steps=4)
     params = torch.load('data/params/af3_pytorch.pt')
     model.load_state_dict(params)
 

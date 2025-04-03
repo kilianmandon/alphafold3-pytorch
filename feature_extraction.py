@@ -12,7 +12,7 @@ import torch
 from torch.nn import functional as F
 from ccd import drop_atoms, load_ccd
 from atom_layout import AtomLayout
-from model import MyModel
+from model import Model
 
 import modelcif
 import modelcif.model
@@ -616,7 +616,7 @@ def msa_feat_test(inp: Input, outp):
 
 def ref_struct_test(inp: Input, output):
     msa_trunc_count = 1024
-    model = MyModel()
+    model = Model()
     params = torch.load('data/params/af3_pytorch.pt', weights_only=False)
     res = model.load_state_dict(params, strict=False)
     if len(res.unexpected_keys) > 0 or len(res.missing_keys) > 0:

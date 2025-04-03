@@ -3,7 +3,8 @@ from torch.nn import functional as F
 import torch
 import tqdm
 
-from atom_cross_attention import AdaptiveLayerNorm, AdaptiveZeroInit, AtomAttentionDecoder, AtomAttentionEncoder, AttentionPairBias, Transition
+from atom_attention import AdaptiveLayerNorm, AdaptiveZeroInit, AtomAttentionDecoder, AtomAttentionEncoder
+from common import AttentionPairBias, Transition
 import utils
 
 
@@ -28,14 +29,6 @@ class DiffusionModule(nn.Module):
         # x_noisy has shape (**batch_shape, N_blocks, 32, 3)
         # t_hat has shape (**batch_shape, )
         atom_layout = ref_struct['atom_layout']
-
-        # compare_all({
-        #     'x_noisy': atom_layout.queries_to_tokens(x_noisy, n_feat_dims=1),
-        #     's_inputs': s_inputs,
-        #     's_trunk': s_trunk,
-        #     'z_trunk': z_trunk,
-        #     'rel_enc': rel_enc,
-        # }, 'debug_diff_start_it2', 'Diff Start Iteration 2', atom_layout)
 
         s, z = self.diffusion_conditioning(t_hat, s_inputs, s_trunk, z_trunk, rel_enc)
         r=x_noisy / torch.sqrt(t_hat**2+self.sigma_data**2)[..., None, None, None]

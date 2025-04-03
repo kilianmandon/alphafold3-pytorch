@@ -1,10 +1,10 @@
 import pickle
 from torch import nn
 import torch
-from atom_cross_attention import Evoformer
+from evoformer import Evoformer
 from diffusion import DiffusionModule, DiffusionSampler
 
-class MyModel(nn.Module):
+class Model(nn.Module):
     def __init__(self, N_cycle=11, noise_steps=30):
         super().__init__()
         self.evoformer = Evoformer(N_cycle=N_cycle)

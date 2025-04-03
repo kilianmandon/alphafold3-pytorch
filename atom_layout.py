@@ -1,7 +1,6 @@
 import torch
 import utils
 
-
 class LayoutConversion:
     def __init__(self, gather_inds, target_mask, n_layout_dims):
         self.gather_inds = gather_inds
