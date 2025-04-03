@@ -1,0 +1,9 @@
+# Important!! The AlphaFold3 params may not be published.
+data/params/*
+!data/params/diff_fourier_bias.pt
+!data/params/diff_fourier_weight.pt
+
+.DS_Store
+.vscode
+__pycache__
+tests
