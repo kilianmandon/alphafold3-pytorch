@@ -77,11 +77,11 @@ class AttentionPairBias(nn.Module):
 
 
         q = q / math.sqrt(c)
-        a = torch.einsum('...ihc,...jhc->...ijh', q, k) + b
-        a += -1e9 * (1-mask[..., None, :, None])
-        a = torch.softmax(a, dim=-2)
+        att = torch.einsum('...ihc,...jhc->...ijh', q, k) + b
+        att += -1e9 * (1-mask[..., None, :, None])
+        att = torch.softmax(att, dim=-2)
 
-        o = torch.einsum('...ijh,...jhc->...ihc', a, v)
+        o = torch.einsum('...ijh,...jhc->...ihc', att, v)
         o = g * o.flatten(-2)
         o = self.linear_out(o)
 
@@ -105,3 +105,18 @@ class Transition(nn.Module):
         x = self.linear_out(F.silu(a) * b)
         return x
 
+
+class ConditionedTransitionBlock(nn.Module):
+    def __init__(self, c_a, c_s, n=2):
+        super().__init__()
+        self.adaptive_layernorm = AdaptiveLayerNorm(c_a, c_s)
+        self.linear_a1 = nn.Linear(c_a, n*c_a, bias=False)
+        self.linear_a2 = nn.Linear(c_a, n*c_a, bias=False)
+        # Note: This should be initialized with bias -2
+        self.ada_zero_init = AdaptiveZeroInit(n*c_a, c_s, c_a)
+    
+    def forward(self, a, s):
+        a = self.adaptive_layernorm(a, s)
+        b = F.silu(self.linear_a1(a)) * self.linear_a2(a)
+        a = self.ada_zero_init(b, s)
+        return a

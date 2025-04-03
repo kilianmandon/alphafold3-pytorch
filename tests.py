@@ -74,7 +74,6 @@ def check_batch(batch, true_batch):
             'ref_space_uid': true_batch['ref_struct']['mask']
         }
     }
-    old_my_pos = torch.load('/Users/kilianmandon/Projects/alphafold3/kilian/quick_test.pt')
 
     true_batch['msa_features']['target_feat'] = true_batch['msa_features']['target_feat'][:, :63]
 

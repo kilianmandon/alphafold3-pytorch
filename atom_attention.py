@@ -1,112 +1,83 @@
+import math
 import torch
 from torch import nn
 
-from common import AdaptiveLayerNorm, AdaptiveZeroInit
+from common import AdaptiveLayerNorm, AdaptiveZeroInit, ConditionedTransitionBlock
 import utils
 
 
 
-class CrossAttentionBlock(nn.Module):
-    def __init__(self, n_heads, c_in=128, key_dim=128, value_dim=128):
+class AtomAttentionPairBias(nn.Module):
+    def __init__(self, N_head, c_in=128, c_z=16):
         super().__init__()
-        self.n_heads = n_heads
+        # According to the paper, these should be shared
         self.layer_norm_q = AdaptiveLayerNorm(c_in, c_in)
         self.layer_norm_k = AdaptiveLayerNorm(c_in, c_in)
-        self.key_dim_per_head = key_dim//n_heads
-        self.value_dim_per_head = value_dim//n_heads
-        self.q_projection = nn.Linear(c_in, key_dim)
-        self.k_projection = nn.Linear(c_in, key_dim, bias=False)
-        self.v_projection = nn.Linear(c_in, value_dim, bias=False)
-        self.gating_query = nn.Linear(c_in, value_dim, bias=False)
+        c = c_in//N_head
+
+        self.layer_norm_z = nn.LayerNorm(c_z, bias=False)
+        self.linear_q = nn.Linear(c_in, c*N_head)
+        self.linear_k = nn.Linear(c_in, c*N_head, bias=False)
+        self.linear_v = nn.Linear(c_in, c*N_head, bias=False)
+        self.linear_b = nn.Linear(c_z, N_head, bias=False)
+        self.linear_g = nn.Linear(c_in, c*N_head, bias=False)
 
         self.ada_zero_init = AdaptiveZeroInit(c_in, c_in, c_in)
+        self.c = c
+        self.N_head = N_head
 
-    def forward(self, x_q, x_k, mask_q, mask_k, pair_logits, single_cond_q, single_cond_k):
-        batch_dim = x_q.shape[:-2]
-        n_queries = x_q.shape[-2]
-        n_keys = x_k.shape[-2]
-        device = x_q.device
+    def forward(self, a_q, a_k, z, s_q, s_k):
+        N_head = self.N_head
+        c = self.c
 
-        x_q = self.layer_norm_q(x_q, single_cond_q)
-        x_k = self.layer_norm_k(x_k, single_cond_k)
-        q = self.q_projection(x_q)
-        q = q.unflatten(-1, (self.n_heads, self.key_dim_per_head))
-        k = self.k_projection(x_k)
-        k = k.unflatten(-1, (self.n_heads, self.key_dim_per_head))
-        # I think it should be like this, but AlphaFold's masks computation is weird.
-        # but no keys are masked anyway
-        # bias = (mask_q[..., None] & mask_k[..., None, :]).to(torch.float32) * -1e9
-        # bias = bias.unsqueeze(-3)
-        bias = torch.zeros(batch_dim + (1, n_queries, n_keys), device=device)
-        scale = self.key_dim_per_head ** -0.5
+        a_q = self.layer_norm_q(a_q, s_q)
+        a_k = self.layer_norm_k(a_k, s_k)
+
+        q = self.linear_q(a_q).unflatten(-1, (N_head, c))
+        k = self.linear_k(a_k).unflatten(-1, (N_head, c))
+        v = self.linear_v(a_k).unflatten(-1, (N_head, c))
+
+        b = self.linear_b(self.layer_norm_z(z))
+        b = torch.einsum('...qkn->...nqk', b)
+
+        g = torch.sigmoid(self.linear_g(a_q))
+
         # Values here get really large, might be numerically unstable? Calculated in fp32 in AF3
-        logits = torch.einsum('...qnc,...knc->...nqk', q * scale, k) + bias
-        if pair_logits is not None:
-            logits += pair_logits
-        attn_weights = torch.softmax(logits, dim=-1)
-        v = self.v_projection(x_k)
-        v = v.unflatten(-1, (self.n_heads, self.value_dim_per_head))
+        # Even changing the layout to qkn instead of nqk significantly increases deviation from AF3
+        q = q / math.sqrt(c)
+        att = torch.einsum('...qnc,...knc->...nqk', q, k) + b
 
-        out = torch.einsum('...nqk,...knc->...qnc', attn_weights, v)
-        out = out.flatten(start_dim=-2)
-        gate_logits = self.gating_query(x_q)
+        att = torch.softmax(att, dim=-1)
 
-        out *= torch.sigmoid(gate_logits)
-        out = self.ada_zero_init(out, single_cond_q)
-        return out
+        o = torch.einsum('...nqk,...knc->...qnc', att, v)
+        o = g * o.flatten(start_dim=-2)
 
+        # According to the paper, there should be an additional linear layer before ada_zero_init
+        o = self.ada_zero_init(o, s_q)
 
-class TransitionBlock(nn.Module):
-    def __init__(self, n_intermediate_factor, c_in=128):
-        super().__init__()
-        self.ada_layer_norm = AdaptiveLayerNorm(c_in, c_in)
-        c_inter = n_intermediate_factor * c_in
-        self.glu1 = nn.Linear(c_in, c_inter, bias=False)
-        self.silu = nn.SiLU()
-        self.glu2 = nn.Linear(c_in, c_inter, bias=False)
-        self.ada_zero_init = AdaptiveZeroInit(c_inter, c_in, c_in)
+        return o
 
-    def forward(self, x, single_cond):
-        x = self.ada_layer_norm(x, single_cond)
-        x = self.silu(self.glu1(x)) * self.glu2(x)
-        x = self.ada_zero_init(x, single_cond)
-        return x
 
 
 class AtomTransformer(nn.Module):
     def __init__(self, c_in=16):
         super().__init__()
-        self.n_blocks = 3
-        self.n_heads = 4
-        self.pair_input_layer_norm = nn.LayerNorm(c_in, bias=False)
-        self.pair_logits_projection = nn.Linear(
-            c_in, self.n_blocks * self.n_heads, bias=False)
+        self.N_block = 3
+        self.N_head = 4
         self.attn_blocks = nn.ModuleList(
-            [CrossAttentionBlock(self.n_heads) for _ in range(self.n_blocks)])
+            [AtomAttentionPairBias(self.N_head) for _ in range(self.N_block)])
         self.transition_blocks = nn.ModuleList(
-            [TransitionBlock(n_intermediate_factor=2) for _ in range(self.n_blocks)])
+            [ConditionedTransitionBlock(c_a=128, c_s=128, n=2) for _ in range(self.N_block)])
 
-    def forward(self, queries_act, atom_layout, queries_single_cond, pair_cond):
-        keys_single_cond = atom_layout.queries_to_keys(queries_single_cond, n_feat_dims=1)
-        queries_mask = atom_layout.tokens_to_queries.target_mask
-        keys_mask = atom_layout.tokens_to_keys.target_mask
+    def forward(self, a_q, atom_layout, s_q, pair_cond):
+        s_k = atom_layout.queries_to_keys(s_q, n_feat_dims=1)
 
-        pair_act = self.pair_input_layer_norm(pair_cond)
-        pair_logits = self.pair_logits_projection(pair_act)
-        # (num_subsets, num_queries, num_keys, num_blocks, num_heads)
-        pair_logits = pair_logits.unflatten(-1, (self.n_blocks, self.n_heads))
-        # (num_blocks, num_subsets, num_heads, num_queries, num_keys)
-        # pair_logits = pair_logits.permute((3, 0, 4, 1, 2))
-        pair_logits = torch.einsum('...ijklo->...liojk', pair_logits)
+        for attn_block, transition_block in zip(self.attn_blocks, self.transition_blocks):
+            a_k = atom_layout.queries_to_keys(a_q, 1)
+            a_q += attn_block(a_q, a_k, pair_cond, s_q, s_k)
+            a_q += transition_block(a_q, s_q)
 
-        for i, (attn_block, transition_block) in enumerate(zip(self.attn_blocks, self.transition_blocks)):
-            # keys_act = queries_act.reshape(-1, 128)[key_inds, :]
-            keys_act = atom_layout.queries_to_keys(queries_act, 1)
-            queries_act += attn_block(queries_act, keys_act, queries_mask,
-                                      keys_mask, pair_logits[i], queries_single_cond, keys_single_cond)
-            queries_act += transition_block(queries_act, queries_single_cond)
-
-        return queries_act
+        return a_q
 
 
 class AtomAttentionEncoder(nn.Module):
@@ -133,7 +104,7 @@ class AtomAttentionEncoder(nn.Module):
             nn.Linear(c_atom_pair, c_atom_pair, bias=False)
         )
 
-        self.cross_att_transformer = AtomTransformer()
+        self.atom_transformer = AtomTransformer()
         self.project_atom_features = nn.Linear(c_atom, c_token, bias=False)
 
         self.use_trunk = use_trunk
@@ -202,7 +173,7 @@ class AtomAttentionEncoder(nn.Module):
 
         pair_act += self.pair_mlp(pair_act)
 
-        queries_act = self.cross_att_transformer(
+        queries_act = self.atom_transformer(
             queries_act,
             atom_layout,
             queries_single_cond,

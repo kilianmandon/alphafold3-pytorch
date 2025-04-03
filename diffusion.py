@@ -3,12 +3,9 @@ from torch.nn import functional as F
 import torch
 import tqdm
 
-from atom_attention import AdaptiveLayerNorm, AdaptiveZeroInit, AtomAttentionDecoder, AtomAttentionEncoder
-from common import AttentionPairBias, Transition
+from atom_attention import AtomAttentionDecoder, AtomAttentionEncoder
+from common import AttentionPairBias, ConditionedTransitionBlock, Transition
 import utils
-
-
-
 
 
 class DiffusionModule(nn.Module):
@@ -98,20 +95,6 @@ class DiffusionConditioning(nn.Module):
         
         return s, z
 
-class ConditionedTransitionBlock(nn.Module):
-    def __init__(self, c_a, c_s, n=2):
-        super().__init__()
-        self.adaptive_layernorm = AdaptiveLayerNorm(c_a, c_s)
-        self.linear_a1 = nn.Linear(c_a, n*c_a, bias=False)
-        self.linear_a2 = nn.Linear(c_a, n*c_a, bias=False)
-        # Note: This should be initialized with bias -2
-        self.ada_zero_init = AdaptiveZeroInit(n*c_a, c_s, c_a)
-    
-    def forward(self, a, s):
-        a = self.adaptive_layernorm(a, s)
-        b = F.silu(self.linear_a1(a)) * self.linear_a2(a)
-        a = self.ada_zero_init(b, s)
-        return a
 
 
 class DiffusionTransformer(nn.Module):
