@@ -1,7 +1,8 @@
 
 
 import torch
-from feature_extraction import Input, move_to_device
+from feature_extraction import Input
+import utils
 from model import Model
 
 def diff(v1, v2, mask=None, atol=1e-3, rtol=1e-2):
@@ -94,9 +95,9 @@ def check_batch(batch, true_batch):
     print('Done!')
 
 def check_evoformer(evo_embeddings, true_evo_embeddings, single_mask):
-    evo_embeddings = move_to_device(evo_embeddings, device='cpu')
-    true_evo_embeddings = move_to_device(true_evo_embeddings, device='cpu')
-    single_mask = move_to_device(single_mask, 'cpu')
+    evo_embeddings = utils.move_to_device(evo_embeddings, device='cpu')
+    true_evo_embeddings = utils.move_to_device(true_evo_embeddings, device='cpu')
+    single_mask = utils.move_to_device(single_mask, 'cpu')
 
     s_input, s_trunk, z_trunk, rel_enc = evo_embeddings
 
@@ -138,10 +139,10 @@ def check_evoformer(evo_embeddings, true_evo_embeddings, single_mask):
     print('Done!')
 
 def check_diffusion(diff_x, true_diff_x, mask):
-    diff_x = move_to_device(diff_x, 'cpu')
-    true_diff_x = move_to_device(true_diff_x, 'cpu')
+    diff_x = utils.move_to_device(diff_x, 'cpu')
+    true_diff_x = utils.move_to_device(true_diff_x, 'cpu')
     true_diff_x = true_diff_x[-1]
-    mask = move_to_device(mask, 'cpu')
+    mask = utils.move_to_device(mask, 'cpu')
     mask = broadcast_mask(mask, diff_x)
     
     diff_x = diff_x * mask
@@ -168,8 +169,11 @@ def main():
     true_batch = torch.load('tests/test_lysozyme/test_outputs/batch.pt')
     check_batch(batch, true_batch)
     
-    device = torch.device('mps')
-    batch = move_to_device(batch, device)
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
+    batch = utils.move_to_device(batch, device)
     model = model.to(device=device)
     model.eval()
 
@@ -192,7 +196,7 @@ def main():
         'aug_rot': diffusion_randaug_rot,
         'aug_trans': diffusion_randaug_trans,
     }
-    diffusion_randomness = move_to_device(diffusion_randomness, device=device)
+    diffusion_randomness = utils.move_to_device(diffusion_randomness, device=device)
 
     s_input, s_trunk, z_trunk, rel_enc = evo_embeddings
     diff_x = model.diffusion_sampler(model.diffusion_module,

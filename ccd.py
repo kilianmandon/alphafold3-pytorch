@@ -23,7 +23,7 @@ def retrieve_cif_attribute(ccd_data, attr):
     return None
 
 def load_ccd_from_file():
-    ccd_path = Path('/Users/kilianmandon/miniconda3/envs/alphafold3_venv/lib/python3.11/site-packages/share/libcifpp/components.cif')
+    ccd_path = Path('data/ccd/components.cif')
     mandatory_keys = (
     '_chem_comp.id',
     '_chem_comp.name',
@@ -77,8 +77,7 @@ def load_ccd_from_file():
     return ccd
 
 def load_ccd():
-    # pickle_path = Path('data/ccd/ccd.pickle')
-    pickle_path = Path('/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/ccd.pickle')
+    pickle_path = Path('data/ccd/ccd.pickle')
 
     if not pickle_path.exists():
         ccd = load_ccd_from_file()
@@ -142,16 +141,6 @@ def add_atoms_to_ccd(ccd):
             atom.SetProp('atom_name', atom_name)
 
         new_atoms = new_atom_types = new_bonds1 = new_bonds2 = []
-        # if res_name == 'PRO':
-        #     new_atoms = ['H2', 'H3']
-        #     new_atom_types = ['H', 'H']
-        #     new_bonds1 = ['N', 'N']
-        #     new_bonds2 = ['H2', 'H3']
-        # elif res_name in residue_constants.restypes_three_letter:
-        #     new_atoms = ['H3']
-        #     new_atom_types = ['H']
-        #     new_bonds1 = ['N']
-        #     new_bonds2 = ['H3']
 
         all_atom_ids = old_atom_ids + new_atoms
         entry['_chem_comp_atom.atom_id'] = all_atom_ids

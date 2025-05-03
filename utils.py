@@ -126,3 +126,20 @@ def quat_vector_mul(q, v):
     v_out = q_out[...,1:]
 
     return v_out
+
+def move_to_device(obj, device):
+    """Recursively move all tensors in a nested structure to a specified device."""
+    if isinstance(obj, torch.Tensor):  
+        return obj.to(device)
+    elif isinstance(obj, dict):  
+        return {key: move_to_device(value, device) for key, value in obj.items()}  
+    elif isinstance(obj, list):  
+        return [move_to_device(item, device) for item in obj]  
+    elif isinstance(obj, tuple):  
+        return tuple(move_to_device(item, device) for item in obj)  
+    elif hasattr(obj, "__dict__"):  
+        for attr in vars(obj):  
+            setattr(obj, attr, move_to_device(getattr(obj, attr), device))
+        return obj  
+    else:
+        return obj

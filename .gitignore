@@ -6,4 +6,4 @@ data/params/*
 .DS_Store
 .vscode
 __pycache__
-tests
+data/ccd

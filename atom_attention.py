@@ -119,9 +119,6 @@ class AtomAttentionEncoder(nn.Module):
     def forward(self, ref_struct, r=None, s_trunk=None, z=None):
         atom_layout = ref_struct['atom_layout']
         per_atom = self.per_atom_cond(ref_struct)
-        # real_atom_count = torch.count_nonzero(ref_struct['mask'])
-        # padded_atom_count = flat_ref_struct['mask'].shape[0]
-        # key_inds = self.calculate_key_inds(real_atom_count, padded_atom_count)
         queries_single_cond = atom_layout.tokens_to_queries(per_atom, 1)
         queries_act = queries_single_cond.clone()
         queries_mask = atom_layout.tokens_to_queries.target_mask

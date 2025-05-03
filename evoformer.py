@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 import tqdm
+from torch.nn.attention.flex_attention import flex_attention
 
 from common import AttentionPairBias, Transition
 from input_embedder import InputEmbedder
@@ -198,10 +199,13 @@ class TriangleAttention(nn.Module):
         self.N_head = N_head
         self.c = c
         self.starting_node = starting_node
+        self.flex_attention = torch.compile(flex_attention)
 
     def forward(self, z, single_mask):
         N_head = self.N_head
         c = self.c
+        N_token = z.shape[-3]
+        batch_shape = z.shape[:-3]
 
         z = self.layer_norm_z(z)
         q = self.linear_q(z).unflatten(-1, (N_head, c))
@@ -209,34 +213,46 @@ class TriangleAttention(nn.Module):
         v = self.linear_v(z).unflatten(-1, (N_head, c))
         g = self.linear_g(z).unflatten(-1, (N_head, c))
 
-        if not self.starting_node and False:
-            q = q.transpose(-3, -4)
-            k = k.transpose(-3, -4)
-            v = v.transpose(-3, -4)
-            g = g.transpose(-3, -4)
-
         bias = self.linear_b(z)
 
         if self.starting_node:
             bias = bias[..., None, :, :, :]
-            a = 1/math.sqrt(c) * \
-                torch.einsum('...ijhc,...ikhc->ijkh', q, k) + bias
-            # a = 1/math.sqrt(c) * torch.einsum('...jihc,...kihc->ijkh', q, k) + bias
-            # a = 1/math.sqrt(c) * torch.einsum('...ijhc,...kjhc->jikh', q, k) + bias
+            bias += -1e9 * (1-single_mask[..., None, None, :, None])
+            q = torch.einsum('...ijhc->...ihjc', q)
+            k = torch.einsum('...ikhc->...ihkc', k)
+            v = torch.einsum('...ikhc->...ihkc', v)
+            bias = torch.einsum('...ijkh->...ihjk', bias)
+            
         else:
             # I'm pretty sure this would be the correct variant for indexing
             # bias = bias[..., None, :, :].transpose(-2, -4)
             bias = bias[..., None, :, :, :].transpose(-3, -4)
-            a = 1/math.sqrt(c) * \
-                torch.einsum('...ijhc,...kjhc->ijkh', q, k) + bias
+            bias += -1e9 * (1-single_mask[..., None, None, :, None])
+            # Layout conversion
+            q = torch.einsum('...ijhc->...jhic', q)
+            k = torch.einsum('...kjhc->...jhkc', k)
+            v = torch.einsum('...kjhc->...jhkc', v)
+            bias = torch.einsum('...ijkh->...jhik', bias)
 
-        a += -1e9 * (1-single_mask[..., None, None, :, None])
-        a = torch.softmax(a, dim=-2)
+        q = torch.flatten(q, end_dim=-4)
+        k = torch.flatten(k, end_dim=-4)
+        bias = torch.flatten(bias, end_dim=-4)
+
+        def bias_score_mod(score, b, h, q_idx, kv_idx):
+            # Broadcasting of bias index over missing token dimension
+            b = b // N_token
+            return score + bias[b, h, q_idx, kv_idx]
+
+        q = q.contiguous(); k = k.contiguous(); v = v.contiguous()
+
+        o = self.flex_attention(q, k, v, score_mod=bias_score_mod)
+
+        o = o.reshape(batch_shape + (N_token, N_head, N_token, c))
 
         if self.starting_node:
-            o = torch.einsum('...ijkh,...ikhc->...ijhc', a, v)
+            o = torch.einsum('...ihjc->...ijhc', o)
         else:
-            o = torch.einsum('...ijkh,...kjhc->ijhc', a, v)
+            o = torch.einsum('...jhic->...ijhc', o)
 
         o = torch.sigmoid(g) * o
         o = o.flatten(-2)

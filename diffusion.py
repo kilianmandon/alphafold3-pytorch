@@ -143,9 +143,6 @@ class DiffusionSampler(nn.Module):
             x = noise_data['init_pos']
         else:
             x = noise_levels[0] * torch.randn(x_shape, device=device)
-        # Note: For Debugging
-        # x = torch.load('kilian/pure_test_outputs/diff_initial_positions.pt', weights_only=False)[0].to(device=device)
-        # x = ref_struct['atom_layout'].tokens_to_queries(x, n_feat_dims=1)
 
         for i, (c_prev, c) in tqdm.tqdm(enumerate(zip(noise_levels[:-1], noise_levels[1:])), total=self.noise_steps):
 
@@ -157,10 +154,6 @@ class DiffusionSampler(nn.Module):
 
             x = self.center_random_aug(x, t2q_mask, ref_struct, rand_rot=rand_rot, rand_trans=rand_trans)
 
-            # compare_all({
-            #     'x': ref_struct['atom_layout'].queries_to_tokens(x, n_feat_dims=1),
-            # }, 'debug_diff_post_aug', 'Diff Post Aug', ref_struct['atom_layout'])
-
             gamma = self.gamma_0 if c > self.gamma_min else 0
             t_hat = c_prev * (gamma + 1)
 
@@ -168,9 +161,6 @@ class DiffusionSampler(nn.Module):
                 noise = noise_data['noise'][i]
             else:
                 noise = self.noise_scale * torch.sqrt(t_hat**2 - c_prev**2) * torch.randn(x_shape, device=device)
-            # Note: For Debugging
-            # noise = torch.load(f'kilian/pure_test_outputs/diff_noise_{i}.pt', weights_only=False).to(device=device)
-            # noise = ref_struct['atom_layout'].tokens_to_queries(noise, n_feat_dims=1)
 
             x_noisy = x+noise
             x_denoised = diffusion_module.forward(x_noisy, t_hat, s_inputs, s_trunk, z_trunk, rel_enc, ref_struct, mask)
@@ -178,12 +168,6 @@ class DiffusionSampler(nn.Module):
             delta = (x_noisy-x_denoised)/t_hat
             dt = c - t_hat
             x = x_noisy + self.step_scale * dt * delta
-            # compare_all({'x': ref_struct['atom_layout'].queries_to_tokens(x, n_feat_dims=1), 
-            #              'delta': ref_struct['atom_layout'].queries_to_tokens(delta, n_feat_dims=1),
-            #              'x_denoised': ref_struct['atom_layout'].queries_to_tokens(x_denoised, n_feat_dims=1),
-            #              }, 
-            #              'debug_diff_sampler', 'Diffusion Sampler', ref_struct['atom_layout'])
-            pass
 
         return x
 
@@ -198,9 +182,7 @@ class CenterRandomAugmentation(nn.Module):
         atom_layout = ref_struct['atom_layout']
         batch_shape = x.shape[:-3]
 
-        # compare_all({'x': atom_layout.queries_to_tokens(x, n_feat_dims=1)}, 'debug_diff_aug_start', 'Diff Aug Start', atom_layout) 
         x = x - utils.masked_mean(x, mask[..., None], dim=(-2,-3), keepdim=True)
-        # compare_all({'x': atom_layout.queries_to_tokens(x, n_feat_dims=1)}, 'debug_diff_aug_centered', 'Diff Aug Centered', atom_layout) 
 
         if rand_rot is None:
             rand_quats = torch.randn(batch_shape+(1,1,4), device=device)
@@ -210,7 +192,6 @@ class CenterRandomAugmentation(nn.Module):
             x = utils.quat_vector_mul(rand_quats, x) + t
         else:
             x = torch.einsum('ji,...j->...i', rand_rot, x) + rand_trans
-        # compare_all({'x': atom_layout.queries_to_tokens(x, n_feat_dims=1)}, 'debug_diff_aug_out', 'Diff Aug Complete', atom_layout) 
 
         return x
 

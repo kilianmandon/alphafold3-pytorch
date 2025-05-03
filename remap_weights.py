@@ -1641,12 +1641,12 @@ def remap_params(weights):
 
     return new_weights
 
-def open_jax_params(filename, mode="rb"):
-    """
+def open_jax_params(filename, mode='rb'):
+    '''
     Open a file normally if uncompressed, or as a decompressed stream if it's zstd-compressed.
-    """
+    '''
     f = open(filename, mode)
-    if filename.endswith(".zst"):
+    if filename.endswith('.zst'):
         dctx = zstd.ZstdDecompressor()
         return dctx.stream_reader(f)
     return f
@@ -1693,7 +1693,7 @@ def load_jax_params(filename):
 
 
 def main():
-    jax_weights = load_jax_params('/Users/kilianmandon/Projects/alphafold3/data/af3.bin.zst')
+    jax_weights = load_jax_params('data/params/af3.bin.zst')
     pytorch_weights = remap_params(jax_weights)
     torch.save(pytorch_weights, 'data/params/af3_pytorch.pt')
 

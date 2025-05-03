@@ -1,29 +1,19 @@
 import copy
 import json
-
-import math
 from pathlib import Path
-import pickle
 from typing import Dict, List
-
 import numpy as np
 import rdkit
 import torch
 from torch.nn import functional as F
 from ccd import drop_atoms, load_ccd
 from atom_layout import AtomLayout
-from model import Model
-
 import modelcif
 import modelcif.model
 import ihm
-
 import residue_constants
 import utils
-
-
 from dataclasses import dataclass, field
-
 from msa_features import crop_pad_to_shape, empty_msa, join_msas, merge_unpaired_paired, pad_to_shape, process_msa_file
 
 base_path = Path('data')
@@ -573,112 +563,3 @@ def round_to_bucket(v):
                         3584, 4096, 4608, 5120])
 
     return buckets[np.argmax(buckets >= v)]
-
-
-def msa_list_test(inp: Input, outp):
-    msa_trunc_count = 1024
-    sel_inds = torch.load(Path(outp) / 'msa_shuffle_order.pt',
-                          weights_only=False)[:msa_trunc_count].int()
-    my_feats = inp.calculate_msa_feature_list(sel_inds=sel_inds)
-    their_feats = torch.load(
-        Path(outp) / 'msa_batch_03_truncated.pt', weights_only=False)
-
-    their_feat_names = ['rows', 'mask',
-                        'deletion_matrix', 'profile', 'deletion_mean']
-    my_feat_names = ['rows', 'msa_mask',
-                     'deletion_matrix', 'profile', 'deletion_mean']
-
-    diff_inds = dict()
-    switches = np.cumsum([seq.tokenCount for seq in inp.sequences])
-
-    for their_key, my_key in zip(their_feat_names, my_feat_names):
-        their_feat = their_feats[their_key]
-        my_feat = my_feats[my_key]
-
-        assert their_feat.shape == my_feat.shape
-
-        diff_inds[my_key] = torch.nonzero(
-            torch.abs(their_feat-my_feat) > 1e-3).numpy()
-        assert torch.allclose(my_feat.float(), their_feat.float(), atol=1e-6)
-
-    pass
-
-
-def msa_feat_test(inp: Input, outp):
-    msa_trunc_count = 1024
-    sel_inds = torch.load(Path(outp) / 'msa_shuffle_order.pt',
-                          weights_only=False)[:msa_trunc_count].int()
-
-    my_feat = inp.calculate_msa_feat(sel_inds=sel_inds)
-    their_feat = torch.load(Path(outp) / 'msa_feat.pt', weights_only=False)
-    assert torch.allclose(my_feat, their_feat, atol=1e-6)
-
-
-def ref_struct_test(inp: Input, output):
-    msa_trunc_count = 1024
-    model = Model()
-    params = torch.load('data/params/af3_pytorch.pt', weights_only=False)
-    res = model.load_state_dict(params, strict=False)
-    if len(res.unexpected_keys) > 0 or len(res.missing_keys) > 0:
-        print("------- Problems with parameter loading ----------")
-        print('Missing keys:')
-        print([k for k in res.missing_keys if not any(f'.{i}.' in k for i in range(1, 50))])
-        print('Unexpected keys:')
-        print(res.unexpected_keys)
-        print()
-    # model.atom_cross_att.per_atom_cond(ref_struct)
-    print('Parameters loaded.')
-    batch = inp.create_batch()
-    model.eval()
-    device = torch.device('mps')
-    # device = 'cpu'
-    model.to(device=device)
-    batch = move_to_device(batch, device=device)
-    with torch.no_grad():
-        token_positions, token_mask = model(batch)
-    
-    token_positions = token_positions.to(device='cpu')
-    token_mask = token_mask.to(device='cpu')
-    ccd = load_ccd()
-    mmcif_string = utils.to_modelcif(token_positions, token_mask, inp, ccd)
-    with open('my_own_model.cif', 'w') as f:
-        f.write(mmcif_string)
-    pass
-
-def move_to_device(obj, device):
-    """Recursively move all tensors in a nested structure to a specified device."""
-    if isinstance(obj, torch.Tensor):  
-        return obj.to(device)  # Move tensor to device
-    elif isinstance(obj, dict):  
-        return {key: move_to_device(value, device) for key, value in obj.items()}  
-    elif isinstance(obj, list):  
-        return [move_to_device(item, device) for item in obj]  
-    elif isinstance(obj, tuple):  
-        return tuple(move_to_device(item, device) for item in obj)  
-    elif hasattr(obj, "__dict__"):  
-        # If the object has a __dict__, it's a custom class -> move its attributes
-        for attr in vars(obj):  
-            setattr(obj, attr, move_to_device(getattr(obj, attr), device))
-        return obj  
-    else:
-        return obj  # Return unchanged if not a tensor, dict, list, or tuple
-
-def tests():
-    test_names = ['Multimer', 'Lysozyme']
-    test_inputs = ['data/fold_input_lysozyme.json']
-    test_outputs = ['kilian/feature_extraction/test_outputs_multimer']
-
-    for name, inp_file, output in zip(test_names, test_inputs, test_outputs):
-        msa_trunc_count = 1024
-        print(f"Running tests for {name}...")
-        inp = Input.load_input(inp_file)
-        ref_struct_test(inp, None)
-
-
-
-def main():
-    tests()
-
-
-if __name__ == '__main__':
-    main()
