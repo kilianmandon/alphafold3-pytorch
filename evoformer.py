@@ -199,7 +199,11 @@ class TriangleAttention(nn.Module):
         self.N_head = N_head
         self.c = c
         self.starting_node = starting_node
-        self.flex_attention = torch.compile(flex_attention)
+
+        if torch.cuda.is_available():
+            self.flex_attention = torch.compile(flex_attention)
+        else:
+            self.flex_attention = flex_attention
 
     def forward(self, z, single_mask):
         N_head = self.N_head
