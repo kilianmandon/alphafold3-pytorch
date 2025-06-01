@@ -1,6 +1,8 @@
 
 
+import time
 import torch
+from ccd import load_ccd
 from feature_extraction import Input
 import utils
 from model import Model
@@ -49,7 +51,9 @@ def check_batch(batch, true_batch):
             'deletion_matrix': batch['deletion_matrix'],
             'profile': batch['profile'],
             'deletion_mean': batch['deletion_mean'],
-            'target_feat': batch['target_feat']
+            'target_feat': batch['target_feat'],
+            'msa_feat': batch['msa_feat'],
+            'msa_mask': batch['msa_mask'],
         },
 
         'token_features': {
@@ -159,13 +163,21 @@ def check_diffusion(diff_x, true_diff_x, mask):
 
 def main():
     msa_shuffle_order = torch.load('tests/test_lysozyme/debug_inputs/msa_shuffle_order.pt').long()
+    # msa_shuffle_order = None
 
     model = Model(N_cycle=2, noise_steps=4)
     params = torch.load('data/params/af3_pytorch.pt')
     model.load_state_dict(params)
+    ccd = load_ccd()
 
-    inp = Input.load_input('data/fold_input_lysozyme.json')
+    t1 = time.time()
+
+    inp = Input.load_input('data/fold_input_lysozyme.json', ccd)
+    t2 = time.time()
+    print(f'Input loading: {t2-t1:.1f} seconds.')
     batch = inp.create_batch(msa_shuffle_order=msa_shuffle_order)
+
+    print(f'Featurization took {time.time()-t1:.1f} seconds.')
     true_batch = torch.load('tests/test_lysozyme/test_outputs/batch.pt')
     check_batch(batch, true_batch)
     

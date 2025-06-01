@@ -2,7 +2,7 @@ import torch
 
 # This is the standard residue order when coding AA type as a number.
 # Reproduce it by taking 3-letter AA codes and sorting them alphabetically.
-restypes = [
+restypes_single_letter = [
     "A",
     "R",
     "N",
@@ -47,6 +47,8 @@ restypes_three_letter = [
     'TYR',
     'VAL',
 ]
+
+restypes_one_to_three = { a: b for a,b in zip(restypes_single_letter, restypes_three_letter) }
 
 _PROTEIN_TO_ID = {
     'A': 0,

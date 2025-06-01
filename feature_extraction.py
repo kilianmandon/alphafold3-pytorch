@@ -6,7 +6,7 @@ import numpy as np
 import rdkit
 import torch
 from torch.nn import functional as F
-from ccd import drop_atoms, load_ccd
+from ccd import drop_atoms
 from atom_layout import AtomLayout
 import modelcif
 import modelcif.model
@@ -42,8 +42,8 @@ class ReferenceStructure:
 
         # atoms = [a for a in mol.GetAtoms() if a.GetSymbol() != 'H' and a.GetProp('atom_name') not in leaving_atoms]
         atoms = drop_atoms(ccd[res_name], drop_hydrogens=True)
-        atom_names = atoms['_chem_comp_atom.atom_id']
-        atom_elements = atoms['_chem_comp_atom.type_symbol']
+        atom_names = atoms['atom_id']
+        atom_elements = atoms['atom_type']
 
         atom_elements = [e for a, e in zip(atom_names, atom_elements) if a not in leaving_atoms]
         atom_names = [a for a in atom_names if a not in leaving_atoms]
@@ -95,7 +95,7 @@ class ReferenceStructure:
                 'atom_name_chars': name_chars
             }
 
-        used_names = used_atom_data['_chem_comp_atom.atom_id']
+        used_names = used_atom_data['atom_id']
         all_elements = torch.tensor(
             [all_atom_data[name]['element'] for name in used_names])
         all_pos = torch.stack([all_atom_data[name]['pos']
@@ -149,24 +149,20 @@ class ReferenceStructure:
         return filtered
 
 
-@dataclass
 class Protein:
-    id: List[str]
-    sequence: str
-    unpairedMsaPath: str
-    pairedMsa: str
-    templates: List[str]
 
-    @property
-    def tokenCount(self):
-        return len(self.sequence) * len(self.id)
+    def __init__(self, id, sequence, unpairedMsaPath, pairedMsa, templates):
+        self.id = id
+        self.sequence = sequence
+        self.unpairedMsaPath = unpairedMsaPath
+        self.pairedMsa = pairedMsa
+        self.templates = templates
 
-    def three_letter_code(self):
-        return [residue_constants.restypes_three_letter[residue_constants.restypes.index(a)] for a in self.sequence]
+        self.tokenCount = len(self.sequence) * len(self.id)
+
 
     def calculate_msa_feats(self, deduplicate=True):
-        unpaired = process_msa_file(
-            base_path / self.unpairedMsaPath, 'protein')
+        unpaired = process_msa_file(base_path / self.unpairedMsaPath, 'protein')
         paired = empty_msa(self.sequence, 'protein')
         merged = merge_unpaired_paired(
             unpaired, paired, config.max_row_count, deduplicate)
@@ -176,12 +172,11 @@ class Protein:
         keys = ['positions', 'mask', 'element',
                 'charge', 'atom_name_chars', 'ref_space_uid']
         all_data = []
+        three_letter_codes = [residue_constants.restypes_one_to_three[a] for a in self.sequence]
         for id in self.id:
-            for i, res in enumerate(self.three_letter_code()):
+            for i, res in enumerate(three_letter_codes):
                 drop_atoms = [] if i == len(self.sequence)-1 else ['OXT']
-
-                data = ReferenceStructure.get_ref_structure(
-                    id, res, ccd, drop_atoms=drop_atoms)
+                data = ReferenceStructure.get_ref_structure(id, res, ccd, drop_atoms=drop_atoms)
                 all_data.append(data)
 
         all_data_stacked = dict()
@@ -214,23 +209,14 @@ class Protein:
 
 
 
-@dataclass
 class Ligand:
-    id: List[str]
-    ccdCodes: List[str]
-    ccdData: Dict = field(default=None)
 
-    @property
-    def sequence(self):
-        return '-' * len(self.ccdData['_chem_comp_atom.atom_id'])
-
-    @property
-    def tokenCount(self):
-        return len(self.sequence) * len(self.id)
-
-    def setup(self, ccd):
-        self.ccdData = drop_atoms(
-            ccd[self.ccdCodes[0]], drop_hydrogens=True, drop_leaving_atoms=True)
+    def __init__(self, id: List[str], ccdCodes: List[str], ccd: Dict):
+        self.id = id
+        self.ccdCodes = ccdCodes
+        self.ccdData = drop_atoms(ccd[self.ccdCodes[0]], drop_hydrogens=True, drop_leaving_atoms=True)
+        self.sequence = '-' * len(self.ccdData['atom_id'])
+        self.tokenCount = len(self.sequence) * len(self.id)
 
     def calculate_msa_feats(self, deduplicate=True):
         return [empty_msa(self.sequence, 'ligand')] * len(self.id)
@@ -241,7 +227,7 @@ class Ligand:
         all_data = []
 
         res = self.ccdCodes[0]
-        is_saccharide = 'saccharide' in self.ccdData['_chem_comp.type'].lower()
+        is_saccharide = 'saccharide' in self.ccdData['type'].lower()
         atoms_to_drop = ['O1'] if is_saccharide else []
         for id in self.id:
             ref_struct = ReferenceStructure.get_ref_structure(
@@ -265,12 +251,12 @@ class Ligand:
     def calculate_contact_matrix(self):
         shape = (len(self.sequence), len(self.sequence))
         contacts = torch.zeros(shape)
-        bond_id1 = self.ccdData['_chem_comp_bond.atom_id_1']
-        bond_id2 = self.ccdData['_chem_comp_bond.atom_id_2']
+        bond_id1 = self.ccdData['bond_atom_id_1']
+        bond_id2 = self.ccdData['bond_atom_id_2']
 
         for bid1, bid2 in zip(bond_id1, bond_id2):
-            bid1 = self.ccdData['_chem_comp_atom.atom_id'].index(bid1)
-            bid2 = self.ccdData['_chem_comp_atom.atom_id'].index(bid2)
+            bid1 = self.ccdData['atom_id'].index(bid1)
+            bid2 = self.ccdData['atom_id'].index(bid2)
             bid1, bid2 = min(bid1, bid2), max(bid1, bid2)
             contacts[bid1, bid2] = 1
 
@@ -287,7 +273,7 @@ class Ligand:
         ]
 
         def atom_iterator():
-            is_saccharide = 'saccharide' in self.ccdData['_chem_comp.type'].lower()
+            is_saccharide = 'saccharide' in self.ccdData['type'].lower()
             leaving_atoms = ['O1'] if is_saccharide else []
 
             for i in range(len(self.id)):
@@ -301,19 +287,15 @@ class Ligand:
         return asym_units, atom_iterator()
 
 
-
-
-
-@dataclass
 class RNA:
-    id: List[str]
-    sequence: str
-    unpairedMsa: str
-    unpairedMsaPath: str
 
-    @property
-    def tokenCount(self):
-        return len(self.sequence) * len(self.id)
+    def __init__(self, id, sequence, unpairedMsa, unpairedMsaPath):
+        self.id = id
+        self.sequence = sequence
+        self.unpairedMsa = unpairedMsa
+        self.unpairedMsaPath = unpairedMsaPath
+        self.tokenCount = len(self.sequence) * len(self.id)
+
 
     def calculate_msa_feats(self, deduplicate=True):
         unpaired = empty_msa(self.sequence, 'rna')
@@ -363,38 +345,31 @@ class RNA:
 
 
 class Input:
-    sequences: List[Protein | RNA | Ligand]
-
-    @property
-    def tokenCount(self):
-        return sum(seq.tokenCount for seq in self.sequences)
-
-    def __init__(self, sequences):
+    def __init__(self, sequences, ccd):
         self.sequences = sequences
+        self.tokenCount = sum(seq.tokenCount for seq in self.sequences)
+        self.ccd = ccd
 
     @staticmethod
-    def load_input(input_file: str):
+    def load_input(input_file: str, ccd):
         with open(input_file, 'r') as f:
             data = json.load(f)
         name = data['name']
         seqs_json = data['sequences']
         seqs = []
-        ccd = load_ccd()
 
         for seq in seqs_json:
             if 'protein' in seq:
                 seqs.append(Protein(**seq['protein']))
             elif 'ligand' in seq:
-                ligand = Ligand(**seq['ligand'])
-                ligand.setup(ccd)
-                seqs.append(ligand)
+                seqs.append(Ligand(ccd=ccd, **seq['ligand']))
             elif 'rna' in seq:
                 seqs.append(RNA(**seq['rna']))
             else:
                 raise NotImplementedError(
                     f'Sequence type not implemented: {seq.keys()}')
 
-        return Input(seqs)
+        return Input(seqs, ccd)
 
     def calculate_msa_feats(self):
         msa_col_count = round_to_bucket(self.tokenCount)
@@ -432,13 +407,18 @@ class Input:
 
         return msa_feat, msa_mask
 
-    def sample_n_msa_feats(self, batch, n=11, msa_trunc_count=1024, msa_shuffle_order = None):
+    def sample_n_msa_feats(self, batch, n, msa_trunc_count=1024, msa_shuffle_order = None):
         msa_feats = []
         msa_masks = []
+
+        if msa_shuffle_order is None:
+            msa_shuffle_order = [None] * n
+
         for i in range(n):
             msa_feat, msa_mask = self.truncate_msa_feat(batch['msa_feat'], batch['msa_mask'], msa_shuffle_order=msa_shuffle_order[i], msa_trunc_count=msa_trunc_count)
             msa_feats.append(msa_feat)
             msa_masks.append(msa_mask)
+
         msa_feat = torch.stack(msa_feats, dim=-1)
         msa_mask = torch.stack(msa_masks, dim=-1)
         batch['msa_feat'] = msa_feat
@@ -464,11 +444,6 @@ class Input:
         return contact_matrix[..., None]
 
     def calculate_token_features(self):
-        # token_index = seq_features.token_index
-        # residue_index = seq_features.residue_index
-        # asym_id = seq_features.asym_id
-        # entity_id = seq_features.entity_id
-        # sym_id = seq_features.sym_id
         token_index = torch.arange(self.tokenCount) + 1
         residue_indices = []
         asym_id_counter = 1
@@ -523,12 +498,11 @@ class Input:
         return token_features
 
     def calculate_ref_structure(self):
-        ccd = load_ccd()
         keys = ['positions', 'mask', 'element',
                 'charge', 'atom_name_chars', 'ref_space_uid']
         all_data = []
         for seq in self.sequences:
-            all_data.append(seq.calculate_ref_structure(ccd))
+            all_data.append(seq.calculate_ref_structure(self.ccd))
 
         ref_struct = dict()
         data_count = round_to_bucket(self.tokenCount)
@@ -553,7 +527,7 @@ class Input:
             **self.calculate_msa_feats(),
         }
         batch['target_feat'] = self.calculate_target_feat(batch)
-        self.sample_n_msa_feats(batch, msa_shuffle_order=msa_shuffle_order)
+        self.sample_n_msa_feats(batch, n=11, msa_shuffle_order=msa_shuffle_order)
 
         return batch
 
