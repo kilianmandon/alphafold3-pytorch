@@ -2,8 +2,8 @@
 
 import time
 import torch
-from ccd import load_ccd
-from feature_extraction import Input
+from feature_extraction.feature_extraction import Input
+from feature_extraction.ccd import load_ccd
 import utils
 from model import Model
 
@@ -43,29 +43,31 @@ def broadcast_mask(mask, v):
 def check_batch(batch, true_batch):
     ref_struct = batch['ref_struct']
     true_ref_struct = true_batch['ref_struct']
+    msa_features = batch['msa_features']
+
+    # Not saved in batch, only deletion_value, so not checked
+    true_batch['msa_features'].pop('deletion_matrix')
 
     batch_matching_names = { 
         'msa_features': {
-            'msa_aatype': batch['msa_aatype'],
-            'rows': batch['rows'],
-            'deletion_matrix': batch['deletion_matrix'],
-            'profile': batch['profile'],
-            'deletion_mean': batch['deletion_mean'],
-            'target_feat': batch['target_feat'],
-            'msa_feat': batch['msa_feat'],
-            'msa_mask': batch['msa_mask'],
+            'msa_aatype': msa_features['restype'],
+            'rows': msa_features['msa'],
+            # 'deletion_matrix': msa_features['deletion_value'],
+            'profile': msa_features['profile'],
+            'deletion_mean': msa_features['deletion_mean'],
+            'target_feat': msa_features['target_feat'],
+            'msa_feat': msa_features['msa_feat'],
+            'msa_mask': msa_features['msa_mask'],
         },
-
-        'token_features': {
-            'residue_index': batch['residue_index'],
-            'token_index': batch['token_index'],
-            'asym_id': batch['asym_id'],
-            'entity_id': batch['entity_id'],
-            'sym_id': batch['sym_id'],
-            'single_mask': batch['single_mask'],
-        }, 
-
-        'ref_struct': batch['ref_struct']
+        'token_features': batch['token_features'], 
+        'ref_struct': {
+          'positions': ref_struct['ref_pos'],
+          'mask': ref_struct['ref_mask'],
+          'element': ref_struct['ref_element'],
+          'charge': ref_struct['ref_charge'],
+          'atom_name_chars': ref_struct['ref_atom_name_chars'],
+          'ref_space_uid': ref_struct['ref_space_uid'],
+        },
     }
 
     batch_masks = { 
@@ -175,7 +177,7 @@ def main():
     inp = Input.load_input('data/fold_input_lysozyme.json', ccd)
     t2 = time.time()
     print(f'Input loading: {t2-t1:.1f} seconds.')
-    batch = inp.create_batch(msa_shuffle_order=msa_shuffle_order)
+    batch = inp.create_batch(msa_shuffle_orders=msa_shuffle_order)
 
     print(f'Featurization took {time.time()-t1:.1f} seconds.')
     true_batch = torch.load('tests/test_lysozyme/test_outputs/batch.pt')
@@ -191,7 +193,7 @@ def main():
 
     evo_embeddings = model.evoformer(batch)
     true_evo_embeddings = torch.load('tests/test_lysozyme/test_outputs/evoformer_embeddings.pt')
-    check_evoformer(evo_embeddings, true_evo_embeddings, batch['single_mask'])
+    check_evoformer(evo_embeddings, true_evo_embeddings, batch['token_features']['single_mask'])
 
     diffusion_init_pos = torch.load('tests/test_lysozyme/debug_inputs/diffusion_initial_pos.pt')
     diffusion_noise = torch.load('tests/test_lysozyme/debug_inputs/diffusion_noise.pt')
@@ -213,12 +215,12 @@ def main():
     s_input, s_trunk, z_trunk, rel_enc = evo_embeddings
     diff_x = model.diffusion_sampler(model.diffusion_module,
                                s_input, s_trunk, z_trunk, rel_enc, 
-                               batch['ref_struct'], batch['single_mask'], noise_data=diffusion_randomness)
+                               batch['ref_struct'], batch['token_features']['single_mask'], noise_data=diffusion_randomness)
 
     diff_x = atom_layout.queries_to_tokens(diff_x, n_feat_dims=1)
 
     true_diff_x = torch.load('tests/test_lysozyme/test_outputs/diffusion_positions.pt')
-    check_diffusion(diff_x, true_diff_x, batch['ref_struct']['mask'])
+    check_diffusion(diff_x, true_diff_x, batch['ref_struct']['ref_mask'])
 
 
 if __name__=='__main__':

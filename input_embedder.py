@@ -15,11 +15,12 @@ class InputEmbedder(nn.Module):
         self.atom_cross_att = AtomAttentionEncoder(c_s, c_z)
 
     def relative_encoding(self, batch, rmax=32, smax=2):
-        token_index = batch['token_index']
-        residue_index = batch['residue_index']
-        asym_id = batch['asym_id']
-        entity_id = batch['entity_id']
-        sym_id = batch['sym_id']
+        token_features = batch['token_features']
+        token_index = token_features['token_index']
+        residue_index = token_features['residue_index']
+        asym_id = token_features['asym_id']
+        entity_id = token_features['entity_id']
+        sym_id = token_features['sym_id']
 
         left_token_index, right_token_index = token_index[...,
                                                           None], token_index[..., None, :]
@@ -58,7 +59,7 @@ class InputEmbedder(nn.Module):
 
     def forward(self, batch):
         # Implements Line 1 to Line 5 from Algorithm 1
-        target_feat = batch['target_feat']
+        target_feat = batch['msa_features']['target_feat']
         token_act, _ = self.atom_cross_att(batch['ref_struct'])
         s_input = torch.cat((target_feat, token_act), dim=-1)
 

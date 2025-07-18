@@ -13,14 +13,17 @@ class Model(nn.Module):
         self.diffusion_sampler = DiffusionSampler(noise_steps=noise_steps)
 
     def forward(self, batch):
+        ref_struct = batch['ref_struct']
+        single_mask = batch['token_features']['single_mask']
+
         s_input, s_trunk, z_trunk, rel_enc = self.evoformer(batch)
 
         x_flat = self.diffusion_sampler(self.diffusion_module,
                                s_input, s_trunk, z_trunk, rel_enc, 
-                               batch['ref_struct'], batch['single_mask'])
+                               ref_struct, single_mask)
 
-        atom_layout = batch['ref_struct']['atom_layout']
-        token_mask = batch['ref_struct']['mask']
+        atom_layout = ref_struct['atom_layout']
+        token_mask = ref_struct['ref_mask']
         x_out = atom_layout.queries_to_tokens(x_flat, n_feat_dims=1)
 
         return x_out, token_mask

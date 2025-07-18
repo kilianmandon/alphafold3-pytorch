@@ -4,6 +4,17 @@ import modelcif.model
 import modelcif.dumper
 import torch
 
+def pad_to_shape(data, padded_shape, value=0):
+    padded = torch.full(padded_shape, fill_value=value, dtype=data.dtype, device=data.device)
+    inds = tuple(slice(i) for i in data.shape)
+    padded[inds] = data
+    return padded
+
+def crop_pad_to_shape(data, padded_shape, value=0):
+    inds = tuple(slice(min(i, j)) for i, j in zip(data.shape, padded_shape))
+    data = data[inds]
+    return pad_to_shape(data, padded_shape, value)
+
 
 def batched_gather(feat, gather_inds, batch_shape):
     # feat has shape (**batch_shape, gather_dim, **feat_dims)

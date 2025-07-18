@@ -7,10 +7,10 @@ class LayoutConversion:
         self.target_mask = target_mask
         self.n_layout_dims = n_layout_dims
         self.feat_dims = {
-            'positions': 1,
-            'mask': 0,
-            'element': 0,
-            'atom_name_chars': 1,
+            'ref_pos': 1,
+            'ref_mask': 0,
+            'ref_element': 0,
+            'ref_atom_name_chars': 1,
             'ref_space_uid': 0,
         }
 
@@ -99,7 +99,7 @@ class AtomLayout:
         return inds
 
     @staticmethod
-    def from_single_mask(mask):
+    def from_ref_mask(mask):
         # mask has shape (N_tokens, 24)
         N_tokens = mask.shape[0]
         N_blocks = N_tokens * 24 // 32

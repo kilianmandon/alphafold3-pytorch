@@ -32,10 +32,13 @@ class Evoformer(nn.Module):
         c_s = self.c_s
         c_z = self.c_z
 
-        batch_shape = batch['target_feat'].shape[:-2]
-        N_token = batch['target_feat'].shape[-2]
-        single_mask = batch['single_mask']
-        device = batch['target_feat'].device
+        msa_features = batch['msa_features']
+        token_features = batch['token_features']
+
+        batch_shape = msa_features['target_feat'].shape[:-2]
+        N_token = msa_features['target_feat'].shape[-2]
+        single_mask = token_features['single_mask']
+        device = msa_features['target_feat'].device
 
         s_input, s_init, z_init, rel_enc = self.input_embedder(batch)
 
@@ -43,9 +46,9 @@ class Evoformer(nn.Module):
         prev_z = torch.zeros(batch_shape+(N_token, N_token, c_z), device=device)
 
         for i in tqdm.tqdm(range(self.N_cycle)):
-            sub_batch = copy.copy(batch)
-            sub_batch['msa_feat'] = sub_batch['msa_feat'][..., i]
-            sub_batch['msa_mask'] = sub_batch['msa_mask'][..., i]
+            sub_batch = copy.deepcopy(batch)
+            sub_batch['msa_features']['msa_feat'] = sub_batch['msa_features']['msa_feat'][..., i]
+            sub_batch['msa_features']['msa_mask'] = sub_batch['msa_features']['msa_mask'][..., i]
 
             z = z_init + self.prev_z_embedding(self.layer_norm_prev_z(prev_z))
             z += self.template_embedder(batch, z)
@@ -72,11 +75,12 @@ class TemplateEmbedder(nn.Module):
 
     def forward(self, batch, z):
         # TODO: Implement actual templates
-        batch_shape = batch['target_feat'].shape[:-2]
-        N_token = batch['target_feat'].shape[-2]
+        target_feat = batch['msa_features']['target_feat']
+        batch_shape = target_feat.shape[:-2]
+        N_token = target_feat.shape[-2]
         N_templates = 4
-        single_mask = batch['single_mask']
-        device = batch['target_feat'].device
+        single_mask = batch['token_features']['single_mask']
+        device = target_feat.device
 
         dummy_a = torch.zeros(batch_shape+(N_token, N_token, N_templates, 106), device=device)
         dummy_aatype = torch.zeros(batch_shape+(N_token,), device=device).long()
@@ -341,9 +345,9 @@ class MSAModule(nn.Module):
             [MSAModuleBlock(c_m, c_z) for _ in range(N_block)])
 
     def forward(self, batch, s, z):
-        msa_feat = batch['msa_feat']
-        msa_mask = batch['msa_mask']
-        single_mask = batch['single_mask']
+        msa_feat = batch['msa_features']['msa_feat']
+        msa_mask = batch['msa_features']['msa_mask']
+        single_mask = batch['token_features']['single_mask']
 
         m = self.linear_m(msa_feat)
         m += self.linear_s(s)

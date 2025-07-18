@@ -135,8 +135,8 @@ class AtomAttentionEncoder(nn.Module):
             ref_struct['ref_space_uid'], 0)
 
         queries_ref_pos = atom_layout.tokens_to_queries(
-            ref_struct['positions'], 1)
-        keys_ref_pos = atom_layout.tokens_to_keys(ref_struct['positions'], 1)
+            ref_struct['ref_pos'], 1)
+        keys_ref_pos = atom_layout.tokens_to_keys(ref_struct['ref_pos'], 1)
 
         offsets_valid = (queries_ref_space_uid.unsqueeze(-1) ==
                          keys_ref_space_uid.unsqueeze(-2)).float()
@@ -182,19 +182,19 @@ class AtomAttentionEncoder(nn.Module):
         token_act = atom_layout.queries_to_tokens(queries_act, 1)
         token_act = torch.relu(self.project_atom_features(token_act))
 
-        # atom_count_per_res = torch.sum(ref_struct['mask'], dim=-1)
+        # atom_count_per_res = torch.sum(ref_struct['ref_mask'], dim=-1)
         # atom_count_per_res = atom_count_per_res[..., None]
 
         # token_act = token_act.sum(
             # dim=-2) / torch.clip(atom_count_per_res, min=1e-10)
-        token_act = utils.masked_mean(token_act, ref_struct['mask'][..., None], dim=-2)
+        token_act = utils.masked_mean(token_act, ref_struct['ref_mask'][..., None], dim=-2)
 
         skip = (queries_act, queries_single_cond, pair_act)
 
         return token_act, skip
 
     def per_atom_cond(self, flat_ref_struct):
-        keys = ['positions', 'mask', 'element', 'charge', 'atom_name_chars']
+        keys = ['ref_pos', 'ref_mask', 'ref_element', 'ref_charge', 'ref_atom_name_chars']
 
         def diff(t1, t2):
             if t1.shape != t2.shape:
@@ -202,15 +202,15 @@ class AtomAttentionEncoder(nn.Module):
                 return
             return torch.nonzero((t1-t2).abs() > 1e-3).numpy()
 
-        mask = flat_ref_struct['mask'][..., None].to(torch.float32)
-        element = flat_ref_struct['element']
-        charge = flat_ref_struct['charge'][..., None].to(torch.float32)
-        name_chars = flat_ref_struct['atom_name_chars']
+        mask = flat_ref_struct['ref_mask'][..., None].to(torch.float32)
+        element = flat_ref_struct['ref_element']
+        charge = flat_ref_struct['ref_charge'][..., None].to(torch.float32)
+        name_chars = flat_ref_struct['ref_atom_name_chars']
         elements_1h = nn.functional.one_hot(element, 128).to(torch.float32)
         atom_names_1h = nn.functional.one_hot(name_chars, 64).to(torch.float32)
         atom_names_1h = atom_names_1h.reshape(atom_names_1h.shape[:-2] + (-1,))
 
-        act = self.embed_ref_pos(flat_ref_struct['positions'])
+        act = self.embed_ref_pos(flat_ref_struct['ref_pos'])
         act += self.embed_ref_mask(mask)
         act += self.embed_ref_element(elements_1h)
         act += self.embed_ref_charge(torch.arcsinh(charge))
