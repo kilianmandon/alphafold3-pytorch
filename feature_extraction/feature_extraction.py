@@ -17,11 +17,7 @@ from feature_extraction.msa_features import CalculateMSAFeatures
 from feature_extraction.ref_struct_features import CalculateRefStructFeatures
 from feature_extraction.token_features import CalculateTokenFeatures
 
-def round_to_bucket(v):
-    buckets = np.array([256, 512, 768, 1024, 1280, 1536, 2048, 2560, 3072,
-                        3584, 4096, 4608, 5120])
 
-    return utils.round_up_to(v, buckets)
 
 def load_input(path):
     with open(path, 'r') as f:
@@ -93,10 +89,10 @@ class DropSaccharideO1(Transform):
 
 
 
-def custom_af3_pipeline():
-    msa_shuffle_orders = np.stack([
-        torch.load(f'/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_lysozyme/rec_{i}_msa_shuffle_order.pt', weights_only=False).long().numpy()
-        for i in range(2)], axis=0)
+def custom_af3_pipeline(n_recycling_iterations, msa_shuffle_orders=None):
+    # msa_shuffle_orders = np.stack([
+    #     torch.load(f'/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_lysozyme/rec_{i}_msa_shuffle_order.pt', weights_only=False).long().numpy()
+    #     for i in range(2)], axis=0)
     transforms = [
         RemoveHydrogens(),
         DropSaccharideO1(),
@@ -107,7 +103,7 @@ def custom_af3_pipeline():
         ),
         CalculateTokenFeatures(),
         CalculateRefStructFeatures(),
-        CalculateMSAFeatures(msa_shuffle_orders=msa_shuffle_orders, n_recycling_iterations=1),
+        CalculateMSAFeatures(msa_shuffle_orders=msa_shuffle_orders, n_recycling_iterations=n_recycling_iterations),
         CalculateContactMatrix(),
         ConvertToTorch(['msa_features', 'ref_struct', 'token_features', 'contact_matrix'], )
     ]

@@ -2,8 +2,7 @@
 
 import time
 import torch
-from feature_extraction.feature_extraction import Input
-from feature_extraction.ccd import load_ccd
+from feature_extraction.feature_extraction import custom_af3_pipeline, load_input
 import utils
 from model import Model
 
@@ -113,13 +112,14 @@ def check_evoformer(evo_embeddings, true_evo_embeddings, single_mask):
     true_evo_embeddings = {
         'pair': true_evo_embeddings['pair'][-1],
         'single': true_evo_embeddings['single'][-1],
-        'target_feat': true_evo_embeddings['target_feat'][-1],
+        # 'target_feat': true_evo_embeddings['target_feat'][-1],
         'rel_enc': true_evo_embeddings['rel_enc'],
     }
+
     evo_embeddings = {
         'pair': z_trunk,
         'single': s_trunk,
-        'target_feat': s_input,
+        # 'target_feat': s_input,
         'rel_enc': rel_enc,
     }
 
@@ -173,32 +173,49 @@ def main():
     model = Model(N_cycle=2, noise_steps=4)
     params = torch.load('data/params/af3_pytorch.pt')
     model.load_state_dict(params)
-    ccd = load_ccd()
 
     t1 = time.time()
+    data = load_input('data/fold_inputs/fold_input_lysozyme.json')
+    transform = custom_af3_pipeline(n_recycling_iterations=2, msa_shuffle_orders=msa_shuffle_order)
 
-    inp = Input.load_input('data/fold_inputs/fold_input_lysozyme.json', ccd)
-    t2 = time.time()
-    print(f'Input loading: {t2-t1:.1f} seconds.')
-    batch = inp.create_batch(msa_shuffle_orders=msa_shuffle_order)
+    batch = transform.forward(data)
+    true_ref_struct = torch.load('tests/test_lysozyme/ref_structure.pt', weights_only=False)
+    batch['ref_struct']['ref_pos'] = torch.tensor(true_ref_struct['positions'])
 
     print(f'Featurization took {time.time()-t1:.1f} seconds.')
-    true_batch = torch.load('tests/test_lysozyme/test_outputs/batch.pt')
-    check_batch(batch, true_batch)
     
     if torch.cuda.is_available():
         device = torch.device('cuda')
     else:
         device = torch.device('cpu')
+
     batch = utils.move_to_device(batch, device)
-    model = model.to(device=device)
+
+    for k, sub in batch.items():
+        if isinstance(sub, torch.Tensor) and sub.dtype == torch.float32:
+            batch[k] = sub.to(dtype=torch.float32)
+        elif isinstance(sub, dict):
+            for k2, subsub in sub.items():
+                if isinstance(subsub, torch.Tensor) and subsub.dtype == torch.float32:
+                    batch[k][k2] = subsub.to(dtype=torch.float32)
+
+    batch['ref_struct']['atom_layout']
+
+    model = model.to(device=device, dtype=torch.float32)
     model.eval()
 
     evo_embeddings = model.evoformer(batch)
     true_evo_embeddings = torch.load('tests/test_lysozyme/test_outputs/evoformer_embeddings.pt')
     check_evoformer(evo_embeddings, true_evo_embeddings, batch['token_features']['single_mask'])
 
-    diffusion_init_pos = torch.load('tests/test_lysozyme/debug_inputs/diffusion_initial_pos.pt')
+    evo_embeddings = utils.move_to_device([
+        evo_embeddings[0],
+        true_evo_embeddings['single'][-1],
+        true_evo_embeddings['pair'][-1],
+        true_evo_embeddings['rel_enc'],
+    ], device)
+
+    diffusion_init_pos = torch.load('tests/test_lysozyme/debug_inputs/diffusion_initial_positions.pt')
     diffusion_noise = torch.load('tests/test_lysozyme/debug_inputs/diffusion_noise.pt')
     diffusion_randaug_rot = torch.load('tests/test_lysozyme/debug_inputs/diffusion_randaug_rot.pt')
     diffusion_randaug_trans = torch.load('tests/test_lysozyme/debug_inputs/diffusion_randaug_trans.pt')

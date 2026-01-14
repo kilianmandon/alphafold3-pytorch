@@ -12,10 +12,10 @@ from atomworks.ml.transforms.encoding import EncodeAF3TokenLevelFeatures
 from atomworks.ml.transforms.msa.msa import LoadPolymerMSAs, PairAndMergePolymerMSAs, EncodeMSA, FillFullMSAFromEncoded
 from atomworks.ml.utils.token import get_token_count, get_token_starts
 
+from feature_extraction.token_features import round_to_bucket
 import utils
 from atom_layout import AtomLayout
 from evoformer import Evoformer
-from feature_extraction.feature_extraction import round_to_bucket
 from feature_extraction.feature_extraction import load_input, custom_af3_pipeline
 from model import Model
 from residue_constants import _PROTEIN_TO_ID, AF3_TOKENS_MAP, AF3_TOKENS
@@ -23,68 +23,82 @@ from tests import diff
 
 
 def test_input_embeddings():
-    data = load_input('data/fold_inputs/fold_input_protein_dna_ion.json')
-    transform = custom_af3_pipeline()
-    out = transform.forward(data)
+    data = load_input('data/fold_inputs/fold_input_lysozyme.json')
+    msa_shuffle_order = torch.load('tests/test_lysozyme/debug_inputs/msa_shuffle_order.pt').long()
+    transform = custom_af3_pipeline(msa_shuffle_orders=msa_shuffle_order, n_recycling_iterations=2)
+    batch = transform.forward(data)
+    exp_ref_struct = torch.load('tests/test_lysozyme/ref_structure.pt', weights_only=False)
+    batch['ref_struct']['ref_pos'] = torch.tensor(exp_ref_struct['positions'])
+
     for k1 in ['msa_features', 'token_features', 'ref_struct']:
-        for k2, v2 in out[k1].items():
-            if isinstance(v2, torch.Tensor) and v2.dtype == torch.float64:
-                out[k1][k2] = v2.float()
+        for k2, v2 in batch[k1].items():
+            if isinstance(v2, torch.Tensor) and v2.dtype == torch.float32:
+                batch[k1][k2] = v2.float()
 
     exp_msa_emb = torch.load(
-        '/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_protein_dna_ion/msa_activations_0.pt',
+        'tests/test_lysozyme/msa_activations_0.pt',
         weights_only=False)
     exp_target_feat_emb = torch.load(
-        '/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_protein_dna_ion/target_feat_activations_0.pt',
+        'tests/test_lysozyme/target_feat_activations_0.pt',
         weights_only=False)[0]
 
     model = Model(N_cycle=2, noise_steps=4)
     params = torch.load('data/params/af3_pytorch.pt')
     model.load_state_dict(params)
 
-    msa_emb = model.evoformer.msa_module.linear_m(out['msa_features']['msa_feat'][..., 0])
-    token_act, _ = model.evoformer.input_embedder.atom_cross_att(out['ref_struct'])
-    s_input = torch.cat((out['msa_features']['target_feat'], token_act), dim=-1)
+    msa_emb = model.evoformer.msa_module.linear_m(batch['msa_features']['msa_feat'][..., 0])
+    token_act, _ = model.evoformer.input_embedder.atom_cross_att(batch['ref_struct'])
+    s_input = torch.cat((batch['msa_features']['target_feat'], token_act), dim=-1)
+    target_feat_concat_exp = torch.load('tests/test_lysozyme/target_feat_concatted.pt', weights_only=False)
     target_feat_emb = model.evoformer.msa_module.linear_s(s_input)
+    mask = batch['token_features']['single_mask'][..., None]
 
     di, da, dr = diff(msa_emb, exp_msa_emb)
     if di.numel() > 0:
+        print('MSA embedding issue')
         ...
+
+    print(f'MSA max err: {da.max()}')
 
     di, da, dr = diff(target_feat_emb, exp_target_feat_emb)
     if di.numel() > 0:
+        print('Target feat embedding issue')
         ...
 
-    ...
+    print(f'TF max err: {da.max()}')
+
+    print('All done.')
 
 def test_full_pass():
     data = load_input('data/fold_inputs/fold_input_lysozyme.json')
-    transform = custom_af3_pipeline()
+    msa_shuffle_order = torch.load('tests/test_lysozyme/debug_inputs/msa_shuffle_order.pt').long()
+    transform = custom_af3_pipeline(msa_shuffle_orders=msa_shuffle_order, n_recycling_iterations=2)
     batch = transform.forward(data)
+    exp_ref_struct = torch.load('tests/test_lysozyme/ref_structure.pt', weights_only=False)
+    batch['ref_struct']['ref_pos'] = torch.tensor(exp_ref_struct['positions'])
+
     for k1 in ['msa_features', 'token_features', 'ref_struct']:
         for k2, v2 in batch[k1].items():
-            if isinstance(v2, torch.Tensor) and v2.dtype == torch.float64:
+            if isinstance(v2, torch.Tensor) and v2.dtype == torch.float32:
                 batch[k1][k2] = v2.float()
 
-    device = torch.device('cpu')
-    batch = utils.move_to_device(batch, device)
 
-    exp_evo_embs = torch.load('/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_lysozyme/evoformer_embeddings.pt', weights_only=False)
+    exp_evo_embs = torch.load('tests/test_lysozyme/test_outputs/evoformer_embeddings.pt', weights_only=False)
     atom_layout = batch['ref_struct']['atom_layout']
+    diff_noise = torch.load('tests/test_lysozyme/debug_inputs/diffusion_noise.pt', weights_only=False)
     noise_data = {
         'init_pos':
             atom_layout.tokens_to_queries(
-            torch.load('/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_lysozyme/diff_initial_positions.pt', weights_only=False)[0],
+            torch.load('tests/test_lysozyme/debug_inputs/diffusion_initial_positions.pt', weights_only=False)[0],
             n_feat_dims=1),
-        'aug_rot': [
-            torch.load(f'/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_lysozyme/diffusion_rand_aug/rand_aug_{i:02d}_rot.pt', weights_only=False) for i in range(4)
-        ],
-        'aug_trans': [torch.load(
-            f'/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_lysozyme/diffusion_rand_aug/rand_aug_{i:02d}_trans.pt',
-            weights_only=False) for i in range(4)],
+        'aug_rot': 
+            torch.load(f'tests/test_lysozyme/debug_inputs/diffusion_randaug_rot.pt', weights_only=False),
+        'aug_trans': torch.load(
+            f'tests/test_lysozyme/debug_inputs/diffusion_randaug_trans.pt',
+            weights_only=False),
         'noise': [
             atom_layout.tokens_to_queries(
-                torch.load(f'/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_lysozyme/diffusion_noise/diffusion_{i:02d}_noise.pt', weights_only=False),
+                diff_noise[i],
                 n_feat_dims=1)
             for i in range(4)
         ]
@@ -92,14 +106,14 @@ def test_full_pass():
 
     exp_final_positions = (
         atom_layout.tokens_to_queries(
-            torch.load('/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_lysozyme/diffusion_final_positions.pt', weights_only=False)[0],
+            torch.load('tests/test_lysozyme/test_outputs/diffusion_final_positions.pt', weights_only=False)[0],
             n_feat_dims=1)
     )
 
     model = Model(N_cycle=2, noise_steps=4)
     params = torch.load('data/params/af3_pytorch.pt')
     model.load_state_dict(params)
-    model.to(device)
+    model.to('cuda')
 
     model.eval()
 
@@ -124,11 +138,15 @@ def test_full_pass():
     for i_old, i_new in token_enc_shift.items():
         s_input[:, i_new] = s_input_exp[:, i_old]
         s_input[:, i_new + 32] = s_input_exp[:, i_old + 31]
-    s_trunk = exp_evo_embs['single'][-1]
-    z_trunk = exp_evo_embs['pair'][-1]
-    rel_enc = exp_evo_embs['rel_enc']
+    # s_trunk = exp_evo_embs['single'][-1]
+    # z_trunk = exp_evo_embs['pair'][-1]
+    # rel_enc = exp_evo_embs['rel_enc']
 
-    # s_input, s_trunk, z_trunk, rel_enc = model.evoformer(batch)
+    batch = utils.move_to_device(batch, 'cuda')
+    model.to('cuda')
+
+    s_input, s_trunk, z_trunk, rel_enc = model.evoformer(batch)
+    s_input, s_trunk, z_trunk, rel_enc = s_input.to('cpu'), s_trunk.to('cpu'), z_trunk.to('cpu'), rel_enc.to('cpu')
     # with open('embeddings.pkl', 'rb') as f:
         # s_input, s_trunk, z_trunk, rel_enc = pickle.load(f)
 
@@ -146,16 +164,26 @@ def test_full_pass():
     if di.numel() > 0:
         max_err = da.max()
         max_rel_err = dr.max()
+        print('Problems with evoformer')
         ...
+
+    s_input, s_trunk, z_trunk, rel_enc = s_input.to('cuda'), s_trunk.to('cuda'), z_trunk.to('cuda'), rel_enc.to('cuda')
+    noise_data = utils.move_to_device(noise_data, 'cuda')
+
+    tf_mask = torch.ones(s_input.shape[-1], device=s_input.device, dtype=bool)
+    tf_mask[415] = tf_mask[447] = False
+    s_input = s_input[:, tf_mask]
 
     x_flat = model.diffusion_sampler(model.diffusion_module,
                                     s_input, s_trunk, z_trunk, rel_enc,
-                                    ref_struct, single_mask, noise_data=noise_data)
+                                    batch['ref_struct'], batch['token_features']['single_mask'], noise_data=noise_data)
 
-    flat_mask = atom_layout.tokens_to_queries(ref_struct['ref_mask'], n_feat_dims=0)
+    x_flat = x_flat.cpu()
+    flat_mask = atom_layout.tokens_to_queries(batch['ref_struct']['ref_mask'], n_feat_dims=0).cpu()
 
     di, da, dr = diff(x_flat, exp_final_positions, mask=flat_mask[..., None])
     if di.numel() > 0:
+        print('Problems with diffusion')
         ...
 
 
@@ -171,15 +199,15 @@ def test_full_pass():
 
 
 def real_full_pass():
-    data = load_input('data/fold_inputs/fold_input_lysozyme.json')
-    transform = custom_af3_pipeline()
+    data = load_input('data/fold_inputs/fold_input_protein_rna_ion.json')
+    transform = custom_af3_pipeline(n_recycling_iterations=11)
     batch = transform.forward(data)
     for k1 in ['msa_features', 'token_features', 'ref_struct']:
         for k2, v2 in batch[k1].items():
-            if isinstance(v2, torch.Tensor) and v2.dtype == torch.float64:
+            if isinstance(v2, torch.Tensor) and v2.dtype == torch.float32:
                 batch[k1][k2] = v2.float()
 
-    device = torch.device('cpu')
+    device = torch.device('cuda')
     batch = utils.move_to_device(batch, device)
 
 
@@ -196,8 +224,8 @@ def real_full_pass():
     x_out, token_mask = model(batch)
     atom_layout = ref_struct['atom_layout']
 
-    x_flat = atom_layout.tokens_to_queries(x_out, n_feat_dims=1).reshape(-1, 3).numpy()
-    flat_mask = atom_layout.tokens_to_queries(token_mask, n_feat_dims=0).bool().numpy()
+    x_flat = atom_layout.tokens_to_queries(x_out, n_feat_dims=1).reshape(-1, 3).cpu().numpy()
+    flat_mask = atom_layout.tokens_to_queries(token_mask, n_feat_dims=0).reshape(-1).bool().cpu().numpy()
 
     atom_array = batch['atom_array']
     atom_array.coord = x_flat[flat_mask]
@@ -208,11 +236,12 @@ def real_full_pass():
 
 
 def test_featurization():
-    data = load_input('data/fold_inputs/fold_input_protein_dna_ion.json')
-    transform = custom_af3_pipeline()
+    data = load_input('data/fold_inputs/fold_input_lysozyme.json')
+    msa_shuffle_order = torch.load('tests/test_lysozyme/debug_inputs/msa_shuffle_order.pt').long()
+    transform = custom_af3_pipeline(msa_shuffle_orders=msa_shuffle_order, n_recycling_iterations=2)
 
     out = transform.forward(data)
-    exp_msa_features = torch.load('/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_protein_dna_ion/msa.pt', weights_only=False)
+    exp_msa_features = torch.load('tests/test_lysozyme/msa.pt', weights_only=False)
 
     # swap 23<->24, 28<->29, shift 30->29->28->27->26->30
     rna_enc_shift = {
@@ -235,8 +264,8 @@ def test_featurization():
 
 
 
-    exp_ref_struct = torch.load('/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_protein_dna_ion/ref_structure.pt', weights_only=False)
-    exp_token_feats = torch.load('/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_protein_dna_ion/token_feats.pt', weights_only=False)
+    exp_ref_struct = torch.load('tests/test_lysozyme/ref_structure.pt', weights_only=False)
+    exp_token_feats = torch.load('tests/test_lysozyme/token_feats.pt', weights_only=False)
 
     exp_token_feats['aatype'] = np.vectorize(lambda a: rna_enc_shift[a])(exp_token_feats['aatype'])
     exp_msa_features['rows'] = np.vectorize(lambda a: rna_enc_shift[a])(exp_msa_features['rows'])
@@ -265,7 +294,7 @@ def test_featurization():
 
         di, da, dr = diff(v1, v2, mask=mask)
 
-        if di.numel() > 0:
+        if di.numel() > 0 or k1=='profile':
             print('MSA issue!')
 
     N_tokens = round_to_bucket(get_token_count(out['atom_array']))
@@ -274,9 +303,7 @@ def test_featurization():
 
     for k1, k2 in zip(['ref_mask', 'ref_element', 'ref_charge', 'ref_atom_name_chars', 'ref_space_uid', 'ref_pos'], ['mask', 'element', 'charge', 'atom_name_chars', 'ref_space_uid', 'positions']):
         v1 = out['ref_struct'][k1]
-        n_feat_dims = len(v1.shape) - 1
-        v1_new_shape = (N_blocks, 32) + v1.shape[1:]
-        v1 = atom_layout.queries_to_tokens(torch.tensor(v1).reshape(v1_new_shape), n_feat_dims=n_feat_dims).numpy()
+        n_feat_dims = len(v1.shape) - 2
         v2 = exp_ref_struct[k2]
         if k1 != 'ref_mask':
             mask = exp_ref_struct['mask']
@@ -284,12 +311,14 @@ def test_featurization():
         else:
             mask = None
         di, da, dr = diff(v1, v2, mask=mask)
+        print(k1)
+        print(da.max())
         if di.numel() > 0:
             print('Refstruct issue!')
 
 
 
-        ...
+    ...
 
 
 
@@ -322,5 +351,5 @@ def test():
 
 if __name__ == '__main__':
     with torch.no_grad():
-        real_full_pass()
+        test_full_pass()
     # test()

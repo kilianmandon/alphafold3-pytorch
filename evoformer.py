@@ -42,8 +42,8 @@ class Evoformer(nn.Module):
 
         s_input, s_init, z_init, rel_enc = self.input_embedder(batch)
 
-        prev_s = torch.zeros(batch_shape+(N_token, c_s), device=device)
-        prev_z = torch.zeros(batch_shape+(N_token, N_token, c_z), device=device)
+        prev_s = torch.zeros(batch_shape+(N_token, c_s), device=device, dtype=torch.float32)
+        prev_z = torch.zeros(batch_shape+(N_token, N_token, c_z), device=device, dtype=torch.float32)
 
         for i in tqdm.tqdm(range(self.N_cycle)):
             sub_batch = copy.deepcopy(batch)
@@ -82,12 +82,12 @@ class TemplateEmbedder(nn.Module):
         single_mask = batch['token_features']['single_mask']
         device = target_feat.device
 
-        dummy_a = torch.zeros(batch_shape+(N_token, N_token, N_templates, 106), device=device)
+        dummy_a = torch.zeros(batch_shape+(N_token, N_token, N_templates, 106), device=device, dtype=torch.float32)
         dummy_aatype = torch.zeros(batch_shape+(N_token,), device=device).long()
         dummy_aatype = F.one_hot(dummy_aatype, 31)
         dummy_a[..., 40:71] = dummy_aatype[..., None, :, None, :]
         dummy_a[..., 71:102] = dummy_aatype[..., :, None, None, :]
-        u = torch.zeros(batch_shape+(N_token, N_token, self.c), device=device)
+        u = torch.zeros(batch_shape+(N_token, N_token, self.c), device=device, dtype=torch.float32)
         for i in range(N_templates):
             v = self.linear_z(self.layer_norm_z(z)) + \
                 self.linear_a(dummy_a[..., i, :])
@@ -380,6 +380,6 @@ class PairFormer(nn.Module):
                                     for _ in range(N_block)])
 
     def forward(self, s, z, single_mask):
-        for block in tqdm.tqdm(self.blocks):
+        for block in self.blocks:
             s, z = block(s, z, single_mask)
         return s, z

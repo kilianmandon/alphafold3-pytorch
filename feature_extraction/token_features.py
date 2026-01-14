@@ -3,10 +3,14 @@ from atomworks.constants import UNKNOWN_AA, STANDARD_RNA, UNKNOWN_RNA, STANDARD_
 from atomworks.ml.transforms.base import Transform
 from atomworks.ml.utils.token import get_token_starts
 
-from feature_extraction.feature_extraction import round_to_bucket
 from residue_constants import AF3_TOKENS_MAP
 import utils
 
+def round_to_bucket(v):
+    buckets = np.array([256, 512, 768, 1024, 1280, 1536, 2048, 2560, 3072,
+                        3584, 4096, 4608, 5120])
+
+    return utils.round_up_to(v, buckets)
 
 def encode_restype(restype):
     return np.vectorize(lambda x: AF3_TOKENS_MAP.get(x, AF3_TOKENS_MAP[UNKNOWN_AA]))(restype)
@@ -47,7 +51,7 @@ class CalculateTokenFeatures(Transform):
             'asym_id': asym_id + 1,
             'entity_id': entity_id + 1,
             'sym_id': sym_id + 1,
-            'single_mask': np.ones(len(token_array)),
+            'single_mask': np.ones(len(token_array), dtype=np.float32),
             'restype': restype,
 
             'is_rna': is_rna,

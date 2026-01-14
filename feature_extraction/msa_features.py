@@ -9,7 +9,6 @@ from atomworks.ml.utils.token import get_token_count, get_token_starts
 
 from torch.nn import functional as F
 import utils
-from feature_extraction.feature_extraction import round_to_bucket
 from residue_constants import AF3_TOKENS_MAP, _PROTEIN_TO_ID
 
 class HotfixDuplicateRowIfSingleMSA(Transform):
@@ -25,6 +24,7 @@ class HotfixDuplicateRowIfSingleMSA(Transform):
                 new_val[1:] = v
                 new_val[0] = v[0]
                 msa_data[k] = new_val
+            msa_data['msa_is_padded_mask'][0] = True
 
         return data
 
@@ -110,7 +110,7 @@ class ConcatMSAs(Transform):
 
         max_msa_size = max(msa_data['msa'].shape[0] for msa_data in polymer_msas.values())
         token_count = get_token_count(atom_array)
-        padded_token_count = round_to_bucket(token_count)
+        padded_token_count = data['token_features']['restype'].shape[0]
 
         full_msa = np.zeros((self.max_msa_sequences, padded_token_count), dtype=np.int64)
         deletion_count = np.zeros((self.max_msa_sequences, padded_token_count), dtype=np.float32)
@@ -177,10 +177,10 @@ class EncodeMSAFeatures(Transform):
         msa_feat, msa_mask = self.sample_msa_features(full_msa_feat, full_msa_mask, self.msa_shuffle_orders)
         target_feat = self.calculate_target_feat(restype, profile, deletion_mean)
 
-        data['msa_features']['msa_feat'] = msa_feat
-        data['msa_features']['msa_mask'] = msa_mask
-        data['msa_features']['target_feat'] = target_feat
-        data['msa_features']['profile'] = profile
+        data['msa_features']['msa_feat'] = msa_feat.astype(np.float32)
+        data['msa_features']['msa_mask'] = msa_mask.astype(np.float32)
+        data['msa_features']['target_feat'] = target_feat.astype(np.float32)
+        data['msa_features']['profile'] = profile.astype(np.float32)
 
         return data
 

@@ -14,7 +14,6 @@ from biotite.structure import AtomArray
 
 import utils
 from atom_layout import AtomLayout
-from feature_extraction.feature_extraction import round_to_bucket
 
 
 class CalculateRefStructFeatures(Transform):
@@ -95,12 +94,12 @@ class CalculateRefStructFeatures(Transform):
             'ref_charge': atom_array.charge,
             'ref_atom_name_chars': self.prep_atom_chars(atom_array.atom_name),
             # 'atom_names': atom_array.atom_name,
-            'ref_pos': self.calculate_ref_positions(atom_array),
+            'ref_pos': self.calculate_ref_positions(atom_array).astype(np.float32),
             'ref_mask': np.ones_like(atom_array.atomic_number),
             'ref_space_uid': ref_space_uid,
         }
 
-        padded_token_count = round_to_bucket(get_token_count(atom_array))
+        padded_token_count = data['token_features']['restype'].shape[0]
         padded_atom_count = padded_token_count * 24
         atom_layout = AtomLayout.from_atom_array(atom_array, padded_token_count)
 

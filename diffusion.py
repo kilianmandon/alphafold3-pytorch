@@ -28,18 +28,22 @@ class DiffusionModule(nn.Module):
         atom_layout = ref_struct['atom_layout']
 
         s, z = self.diffusion_conditioning(t_hat, s_inputs, s_trunk, z_trunk, rel_enc)
+        debug_data = utils.move_to_device(torch.load('tests/test_lysozyme/debug_diff_mod_cond.pt', weights_only=False), x_noisy.device)
         r=x_noisy / torch.sqrt(t_hat**2+self.sigma_data**2)[..., None, None, None]
 
 
         a, (q_skip, c_skip, p_skip) = self.atom_att_enc(ref_struct, r=r, s_trunk=s_trunk, z=z)
+        debug_data = utils.move_to_device(torch.load('tests/test_lysozyme/debug_diff_mod_att_enc.pt', weights_only=False), x_noisy.device)
 
 
         a += self.linear_s(self.layer_norm_s(s))
         a = self.diffusion_transformer(a, s, z, mask, atom_layout)
+        debug_data = utils.move_to_device(torch.load('tests/test_lysozyme/debug_diff_mod_transformer.pt', weights_only=False), x_noisy.device)
 
         a = self.layer_norm_a(a)
 
         r_update = self.atom_att_dec.forward(a, q_skip, c_skip, p_skip, ref_struct)
+        debug_data = utils.move_to_device(torch.load('tests/test_lysozyme/debug_diff_mod_att_dec.pt', weights_only=False), x_noisy.device)
 
         d_skip = self.sigma_data**2 / (self.sigma_data**2+t_hat**2)
         d_scale = self.sigma_data * t_hat / torch.sqrt(self.sigma_data**2 + t_hat**2)
@@ -84,6 +88,8 @@ class DiffusionConditioning(nn.Module):
         for block in self.z_transition:
             z += block(z)
 
+        # exp_start_s = torch.load('tests/test_lysozyme/diff_s_before_embedding.pt', weights_only=False)
+        # exp_end_s = torch.load('tests/test_lysozyme/diff_s_after_embedding.pt', weights_only=False)
         s = torch.cat((s_trunk, s_inputs), dim=-1)
         tf_mask = torch.ones(s.shape[-1], device=s.device, dtype=bool)
         tf_mask[415] = tf_mask[447] = False
@@ -105,6 +111,7 @@ def apply_layernorm_masked(inp, layer_norm, mask):
     # return (inp - masked_mean) / torch.sqrt(masked_var + layer_norm.eps) * layer_norm.weight
     fake_layernorm = nn.LayerNorm((masked_inp.shape[-1],), eps=layer_norm.eps, bias=False)
     fake_layernorm.weight.copy_(layer_norm.weight[mask])
+    fake_layernorm.to(inp.device, dtype=inp.dtype)
     masked_out = fake_layernorm(masked_inp)
     full_out = torch.zeros_like(inp)
     full_out[:, mask] = masked_out
@@ -154,15 +161,15 @@ class DiffusionSampler(nn.Module):
         x_shape = batch_shape + (N_block, 32, 3)
 
         if noise_data is not None:
-            x = noise_levels[0] * noise_data['init_pos']
+            x = noise_levels[0] * noise_data['init_pos'].to(dtype=torch.float32)
         else:
             x = noise_levels[0] * torch.randn(x_shape, device=device)
 
         for i, (c_prev, c) in tqdm.tqdm(enumerate(zip(noise_levels[:-1], noise_levels[1:])), total=self.noise_steps):
 
             if noise_data is not None:
-                rand_rot = noise_data['aug_rot'][i]
-                rand_trans = noise_data['aug_trans'][i]
+                rand_rot = noise_data['aug_rot'][i].to(dtype=torch.float32)
+                rand_trans = noise_data['aug_trans'][i].to(dtype=torch.float32)
             else:
                 rand_rot = rand_trans = None
 
@@ -178,7 +185,14 @@ class DiffusionSampler(nn.Module):
 
             x_noisy = x+noise
             x_denoised = diffusion_module.forward(x_noisy, t_hat, s_inputs, s_trunk, z_trunk, rel_enc, ref_struct, mask)
-
+            # debug_noisy = ref_struct['atom_layout'].tokens_to_queries(
+            #     torch.load(f'tests/test_lysozyme/positions_noisy_{i}.pt', weights_only=False).to(x_noisy.device),
+            #     n_feat_dims=1
+            # )
+            # debug_denoised = ref_struct['atom_layout'].tokens_to_queries(
+            #     torch.load(f'tests/test_lysozyme/positions_denoised_{i}.pt', weights_only=False).to(x_noisy.device),
+            #     n_feat_dims=1
+            # )
 
             delta = (x_noisy-x_denoised)/t_hat
             dt = c - t_hat

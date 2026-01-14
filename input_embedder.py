@@ -52,7 +52,7 @@ class InputEmbedder(nn.Module):
 
         p = torch.cat(
             (a_rel_pos, a_rel_token, same_entity[..., None], a_rel_chain), dim=-1)
-        rel_feat = p.float()
+        rel_feat = p.to(dtype=torch.float32)
         rel_enc = self.position_activations(rel_feat)
 
         return rel_enc, rel_feat

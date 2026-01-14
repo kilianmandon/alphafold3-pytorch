@@ -1,7 +1,3 @@
-import io
-import modelcif
-import modelcif.model
-import modelcif.dumper
 import numpy as np
 import torch
 
@@ -37,6 +33,7 @@ def round_down_to(data, rounding_target, return_indices=False):
         return rounding_target[target_inds]
 
 def round_up_to(data, rounding_target, return_indices=False):
+    data = np.array(data)
     sorting_indices = np.argsort(rounding_target)
     target_inds = np.argmax(rounding_target[sorting_indices] >= data[..., None], axis=-1)
     target_inds = sorting_indices[target_inds]
@@ -71,36 +68,6 @@ def masked_mean(feat, mask, dim, keepdim=False):
     feat_sum = (feat*mask).sum(dim=dim, keepdim=keepdim)
     count = mask.sum(dim=dim, keepdim=keepdim)
     return feat_sum / torch.clip(count, min=1e-10)
-
-def to_modelcif(token_positions, token_mask, inp, ccd):
-    all_asym_units = []
-    all_atom_iterators = []
-
-    system = modelcif.System(title='AlphaFold 3 Prediction')
-    chunks = [seq.tokenCount for seq in inp.sequences]
-    totalCount = sum(chunks)
-    
-    split_positions = torch.split(token_positions[:totalCount], chunks)
-    split_mask = torch.split(token_mask[:totalCount], chunks)
-
-    for i, seq in enumerate(inp.sequences):
-        asym_units, atom_iterator = seq.get_model(ccd, split_positions[i], split_mask[i])
-        all_asym_units += asym_units
-        all_atom_iterators.append(atom_iterator)
-    modeled_assembly = modelcif.Assembly(all_asym_units, name='Modeled Assembly')
-
-    class _MyModel(modelcif.model.AbInitioModel):
-        def get_atoms(self):
-            for iterator in all_atom_iterators:
-                yield from iterator
-
-    model = _MyModel(assembly=modeled_assembly, name='Model')
-    model_group = modelcif.model.ModelGroup([model], name='All models')
-    system.model_groups.append(model_group)
-    fh = io.StringIO()
-    modelcif.dumper.write(fh, [system])
-
-    return fh.getvalue()
 
 
 
@@ -173,19 +140,19 @@ def quat_vector_mul(q, v):
 
     return v_out
 
-def move_to_device(obj, device):
+def move_to_device(obj, device=None, dtype=None):
     """Recursively move all tensors in a nested structure to a specified device."""
     if isinstance(obj, torch.Tensor):  
-        return obj.to(device)
+        return obj.to(device=device, dtype=dtype)
     elif isinstance(obj, dict):  
-        return {key: move_to_device(value, device) for key, value in obj.items()}  
+        return {key: move_to_device(value, device, dtype) for key, value in obj.items()}  
     elif isinstance(obj, list):  
-        return [move_to_device(item, device) for item in obj]  
+        return [move_to_device(item, device, dtype) for item in obj]  
     elif isinstance(obj, tuple):  
         return tuple(move_to_device(item, device) for item in obj)  
     elif isinstance(obj, AtomLayout) or isinstance(obj, LayoutConversion):
         for attr in vars(obj):
-            setattr(obj, attr, move_to_device(getattr(obj, attr), device))
+            setattr(obj, attr, move_to_device(getattr(obj, attr), device, dtype))
         return obj
     else:
         return obj

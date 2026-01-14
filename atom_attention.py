@@ -139,7 +139,7 @@ class AtomAttentionEncoder(nn.Module):
         keys_ref_pos = atom_layout.tokens_to_keys(ref_struct['ref_pos'], 1)
 
         offsets_valid = (queries_ref_space_uid.unsqueeze(-1) ==
-                         keys_ref_space_uid.unsqueeze(-2)).float()
+                         keys_ref_space_uid.unsqueeze(-2)).to(dtype=torch.float32)
         offsets_valid = offsets_valid.unsqueeze(-1)
         offsets = queries_ref_pos.unsqueeze(-2) - keys_ref_pos.unsqueeze(-3)
 
@@ -196,11 +196,6 @@ class AtomAttentionEncoder(nn.Module):
     def per_atom_cond(self, flat_ref_struct):
         keys = ['ref_pos', 'ref_mask', 'ref_element', 'ref_charge', 'ref_atom_name_chars']
 
-        def diff(t1, t2):
-            if t1.shape != t2.shape:
-                print(f"Shape mismatch: {t1.shape} | {t2.shape}")
-                return
-            return torch.nonzero((t1-t2).abs() > 1e-3).numpy()
 
         mask = flat_ref_struct['ref_mask'][..., None].to(torch.float32)
         element = flat_ref_struct['ref_element'].long()
