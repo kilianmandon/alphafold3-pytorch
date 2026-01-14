@@ -1,0 +1,17 @@
+[project]
+name = "alphafold3-pytorch"
+version = "0.1.0"
+description = "Environment for a custom AlphaFold 3 implementation."
+requires-python = ">=3.12"
+
+dependencies = [
+    "torch", # pytorch
+    "jax", # needed so numpy can read bfloat16 param files
+    "numpy>=2.4",
+    "tqdm",
+    "zstandard",
+    "rdkit==2024.03.5",
+    "atomworks[ml]>=2.2.0",
+    "dotenv>=0.9.9",
+    "ipykernel>=7.1.0",
+]

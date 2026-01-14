@@ -1,4 +1,8 @@
+import numpy as np
 import torch
+from atomworks.ml.utils.token import get_token_starts
+from biotite.structure import AtomArray
+
 import utils
 
 class LayoutConversion:
@@ -97,6 +101,17 @@ class AtomLayout:
 
         inds = torch.stack([torch.arange(a[0], a[1]) for a in bounds], dim=0)
         return inds
+
+    @staticmethod
+    def from_atom_array(atom_array: AtomArray, padded_token_count):
+        token_borders = get_token_starts(atom_array, add_exclusive_stop=True)
+        token_starts, token_ends = token_borders[:-1], token_borders[1:]
+
+        ref_mask = np.arange(24) < (token_ends - token_starts)[..., None]
+        ref_mask = utils.pad_to_shape_np(ref_mask, (padded_token_count, 24))
+        return AtomLayout.from_ref_mask(torch.tensor(ref_mask))
+
+
 
     @staticmethod
     def from_ref_mask(mask):

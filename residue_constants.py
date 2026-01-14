@@ -1,4 +1,7 @@
+import numpy as np
 import torch
+from atomworks.constants import STANDARD_AA, UNKNOWN_AA, STANDARD_RNA, UNKNOWN_RNA, UNKNOWN_DNA, STANDARD_DNA, GAP
+from atomworks.ml.transforms.msa._msa_constants import AMINO_ACID_ONE_LETTER_TO_INT, RNA_NUCLEOTIDE_ONE_LETTER_TO_INT
 
 # This is the standard residue order when coding AA type as a number.
 # Reproduce it by taking 3-letter AA codes and sorting them alphabetically.
@@ -48,7 +51,23 @@ restypes_three_letter = [
     'VAL',
 ]
 
+AF3_TOKENS = (
+    # 20 AA + 1 unknown AA
+    *STANDARD_AA, UNKNOWN_AA,
+    # 1 gap
+    GAP,
+    # 4 RNA
+    *STANDARD_RNA, UNKNOWN_RNA,
+    # 4 DNA
+    *STANDARD_DNA, UNKNOWN_DNA
+)
+
+AF3_TOKENS_MAP = dict(zip(AF3_TOKENS, range(len(AF3_TOKENS))))
+AF3_TOKENS_MAP[UNKNOWN_RNA] = AF3_TOKENS_MAP[UNKNOWN_AA]
+AF3_TOKENS_MAP[UNKNOWN_DNA] = AF3_TOKENS_MAP[UNKNOWN_AA]
+
 restypes_one_to_three = { a: b for a,b in zip(restypes_single_letter, restypes_three_letter) }
+restypes_three_to_one = { b: a for a,b in zip(restypes_single_letter, restypes_three_letter) }
 
 _PROTEIN_TO_ID = {
     'A': 0,
@@ -101,3 +120,13 @@ _DNA_TO_ID = {
     'C': 28,
     'T': 29,
 }
+
+ATOMWORKS_TO_AF3_MSA_ENCODING_LOOKUP = np.full(42, fill_value=_PROTEIN_TO_ID['X'])
+
+for letter, i in AMINO_ACID_ONE_LETTER_TO_INT.items():
+    if letter in _PROTEIN_TO_ID:
+        ATOMWORKS_TO_AF3_MSA_ENCODING_LOOKUP[i] = _PROTEIN_TO_ID[letter]
+
+for letter, i in RNA_NUCLEOTIDE_ONE_LETTER_TO_INT.items():
+    if letter in _RNA_TO_ID:
+        ATOMWORKS_TO_AF3_MSA_ENCODING_LOOKUP[i] = _RNA_TO_ID[letter]

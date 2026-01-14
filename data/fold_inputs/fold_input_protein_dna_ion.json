@@ -1,0 +1,41 @@
+{
+ "name": "Protein-DNA-Ion: PDB 7RCE",
+ "sequences": [
+  {
+   "protein": {
+    "id": "A",
+    "sequence": "MASSRRESINPWILTGFADAEGSFGLSILNRNRGTARYHTRLSFTIMLHNKDKSILENIQSTWKVGSILNNGDHYVSLVVYRFEDLKVIIDHFEKYPLITQKLGDYKLFKQAFSVMENKEHLKENGIKELVRIKAKMNWGLNDELKKAFPENISKERPLINKNIPNFKWLAGFTSGDGSFFVRLRKSNVNARVRVQLVFEISQHIRDKNLMNSLITYLGCGHIYEGNKSERSWLQFRVEKFSDINDKIIPVFQENTLIGVKLEDFEDWCKVAKLIEEKKHLTESGLDEIKKIKLNMNKGR",
+    "unpairedMsaPath": "data/fold_inputs/alignments/alignment_protein_dna_ion.a3m",
+    "pairedMsa": "",
+    "templates": []
+   }
+  },
+  {
+   "dna": {
+    "id": "B",
+    "sequence": "GGGGGCATGCAGATCCCACAGGCGCG"
+   }
+  },
+  {
+   "dna": {
+    "id": "C",
+    "sequence": "CCGCGCCTGTGGGATCTGCATGCCCC"
+   }
+  },
+  {
+   "ligand": {
+    "id": ["D", "E", "F"],
+    "ccdCodes": ["CA", "CA", "CA"]
+   }
+  },
+  {
+   "ligand": {
+    "id": ["G"],
+    "ccdCodes": ["NA"]
+   }
+  }
+ ],
+ "modelSeeds": [1],
+ "dialect": "alphafold3",
+ "version": 2
+}

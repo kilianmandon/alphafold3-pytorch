@@ -53,7 +53,7 @@ class DiffusionModule(nn.Module):
 
 
 class DiffusionConditioning(nn.Module):
-    def __init__(self, sigma_data, c_z=128, c_s=384, c_fourier=256, rel_feat_dim=139, tf_dim=447):
+    def __init__(self, sigma_data, c_z=128, c_s=384, c_fourier=256, rel_feat_dim=139, tf_dim=449):
         super().__init__()
         self.sigma_data = sigma_data
 
@@ -85,7 +85,10 @@ class DiffusionConditioning(nn.Module):
             z += block(z)
 
         s = torch.cat((s_trunk, s_inputs), dim=-1)
-        s = self.linear_s(self.layer_norm_s(s))
+        tf_mask = torch.ones(s.shape[-1], device=s.device, dtype=bool)
+        tf_mask[415] = tf_mask[447] = False
+        s = self.linear_s(apply_layernorm_masked(s, self.layer_norm_s, tf_mask))
+        # s = self.linear_s(self.layer_norm_s(s))
         c_noise = 1/4 * torch.log(t_hat/self.sigma_data)
         n = self.fourier_embedding(c_noise)
         s += self.linear_fourier(self.layer_norm_fourier(n))
@@ -95,6 +98,17 @@ class DiffusionConditioning(nn.Module):
         
         return s, z
 
+
+def apply_layernorm_masked(inp, layer_norm, mask):
+    masked_inp = inp[:, mask]
+    # masked_mean, masked_var = masked_inp.mean(-1, keepdim=True), masked_inp.var(-1, keepdim=True)
+    # return (inp - masked_mean) / torch.sqrt(masked_var + layer_norm.eps) * layer_norm.weight
+    fake_layernorm = nn.LayerNorm((masked_inp.shape[-1],), eps=layer_norm.eps, bias=False)
+    fake_layernorm.weight.copy_(layer_norm.weight[mask])
+    masked_out = fake_layernorm(masked_inp)
+    full_out = torch.zeros_like(inp)
+    full_out[:, mask] = masked_out
+    return full_out
 
 
 class DiffusionTransformer(nn.Module):
@@ -140,7 +154,7 @@ class DiffusionSampler(nn.Module):
         x_shape = batch_shape + (N_block, 32, 3)
 
         if noise_data is not None:
-            x = noise_data['init_pos']
+            x = noise_levels[0] * noise_data['init_pos']
         else:
             x = noise_levels[0] * torch.randn(x_shape, device=device)
 
@@ -158,12 +172,13 @@ class DiffusionSampler(nn.Module):
             t_hat = c_prev * (gamma + 1)
 
             if noise_data is not None:
-                noise = noise_data['noise'][i]
+                noise = self.noise_scale * torch.sqrt(t_hat**2 - c_prev**2) * noise_data['noise'][i]
             else:
                 noise = self.noise_scale * torch.sqrt(t_hat**2 - c_prev**2) * torch.randn(x_shape, device=device)
 
             x_noisy = x+noise
             x_denoised = diffusion_module.forward(x_noisy, t_hat, s_inputs, s_trunk, z_trunk, rel_enc, ref_struct, mask)
+
 
             delta = (x_noisy-x_denoised)/t_hat
             dt = c - t_hat

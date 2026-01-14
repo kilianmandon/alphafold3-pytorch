@@ -1,0 +1,17 @@
+{
+    "name": "DEBUG",
+    "sequences": [
+      {
+        "protein": {
+          "id": "A",
+          "sequence": "Q",
+          "unpairedMsaPath": "data/fold_inputs/alignments/debug_alignment.a3m",
+          "pairedMsa": "",
+          "templates": []
+        }
+      }
+    ],
+    "modelSeeds": [1],
+    "dialect": "alphafold3",
+    "version": 2
+  }

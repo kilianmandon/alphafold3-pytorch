@@ -1,206 +1,237 @@
-import re
 import numpy as np
 import torch
-from torch import nn
+from atomworks.constants import UNKNOWN_AA
+from atomworks.ml.transforms.atom_array import get_chain_instance_starts
+from atomworks.ml.transforms.base import Transform, Compose
+from atomworks.ml.transforms.msa._msa_constants import MSA_INTEGER_TO_THREE_LETTER
+from atomworks.ml.transforms.msa.msa import LoadPolymerMSAs, PairAndMergePolymerMSAs
+from atomworks.ml.utils.token import get_token_count, get_token_starts
+
 from torch.nn import functional as F
-from residue_constants import _DNA_TO_ID, _PROTEIN_TO_ID, _RNA_TO_ID
 import utils
+from feature_extraction.feature_extraction import round_to_bucket
+from residue_constants import AF3_TOKENS_MAP, _PROTEIN_TO_ID
+
+class HotfixDuplicateRowIfSingleMSA(Transform):
+    def __init__(self):
+        ...
+
+    def forward(self, data):
+        if len(data['polymer_msas_by_chain_id']) == 1:
+            msa_data = list(data['polymer_msas_by_chain_id'].values())[0]
+            for k, v in msa_data.items():
+                new_shape = (v.shape[0]+1,) + v.shape[1:]
+                new_val = np.zeros(new_shape, v.dtype)
+                new_val[1:] = v
+                new_val[0] = v[0]
+                msa_data[k] = new_val
+
+        return data
+
+class HotfixEncodeRNAAsProtein(Transform):
+    def forward(self, data):
+        is_rna = data['token_features']['is_rna']
+        is_dna = data['token_features']['is_dna']
+        is_nucleic = is_rna | is_dna
+
+        if np.all(~is_nucleic):
+            return data
+
+        for k in data['msa_features']:
+            if k == 'full_msa_mask':
+                continue
+            original_data = data['msa_features'][k][:, is_nucleic]
+            shifted = np.roll(original_data, 1, axis=0)
+            if k != 'individual_msa_mask':
+                shifted[0] = shifted[1]
+            data['msa_features'][k][:, is_nucleic] = shifted
+
+        msa_first_row = data['msa_features']['msa'][0, is_nucleic]
+        hotfix_map = {
+            i: i for i in range(32)
+        } | {
+            AF3_TOKENS_MAP['A']: AF3_TOKENS_MAP['ALA'],
+            AF3_TOKENS_MAP['C']: AF3_TOKENS_MAP['CYS'],
+            AF3_TOKENS_MAP['G']: AF3_TOKENS_MAP['GLY'],
+            AF3_TOKENS_MAP['U']: AF3_TOKENS_MAP['CYS'],
+            AF3_TOKENS_MAP['DA']: AF3_TOKENS_MAP['ALA'],
+            AF3_TOKENS_MAP['DC']: AF3_TOKENS_MAP['CYS'],
+            AF3_TOKENS_MAP['DG']: AF3_TOKENS_MAP['GLY'],
+            AF3_TOKENS_MAP['DT']: AF3_TOKENS_MAP['THR'],
+        }
+        msa_first_row = np.vectorize(hotfix_map.get)(msa_first_row)
+        data['msa_features']['msa'][0, is_nucleic] = msa_first_row
+
+        return data
+
+class HotfixAF3LigandAsGap(Transform):
+    def forward(self, data):
+        ligand_inds = np.nonzero(data['token_features']['is_ligand'])[0]
+        data['msa_features']['msa'][0, ligand_inds] = _PROTEIN_TO_ID['-']
+        return data
 
 
-id_maps = {
-    'rna': _RNA_TO_ID,
-    'dna': _DNA_TO_ID,
-    'protein': _PROTEIN_TO_ID,
-    'ligand': _PROTEIN_TO_ID,
-}
+class EncodeMSA(Transform):
+    def __init__(self):
+        self.lookup_table = np.zeros(len(MSA_INTEGER_TO_THREE_LETTER), dtype=np.int8)
+        for i_msa, code in MSA_INTEGER_TO_THREE_LETTER.items():
+            self.lookup_table[i_msa] = AF3_TOKENS_MAP.get(code, AF3_TOKENS_MAP[UNKNOWN_AA])
 
-
-def load_a3m_file(file_name: str):
-    with open(file_name, 'r') as f:
-        lines = f.readlines()
-
-    description_line_indices = [i for i, l in enumerate(lines) if l.startswith('>')]
-
-    seqs = [lines[i+1].strip() for i in description_line_indices]
-
-    return seqs
-
-def map_seq_to_inds(seq, seq_type):
-    id_map = id_maps[seq_type]
-    sequence_inds = torch.tensor([id_map[a] for a in seq])
-    return sequence_inds
-
-def initial_data_from_seqs(seqs, seq_type):
-    deletion_count_matrix = []
-    unique_seqs = []
-    for seq in seqs:
-        deletion_count_list = []
-        deletion_counter = 0
-        for letter in seq:
-            if letter.islower():
-                deletion_counter += 1
-            else:
-                deletion_count_list.append(deletion_counter)
-                deletion_counter = 0
-        
-        seq_without_deletion = re.sub('[a-z]', '', seq)
-
-        if seq_without_deletion in unique_seqs:
-            continue
-
-        unique_seqs.append(seq_without_deletion)
-        deletion_count_matrix.append(deletion_count_list)
-
-    unique_seqs = torch.stack([map_seq_to_inds(seq, seq_type) for seq in unique_seqs], dim=0).long()
-    
-    if seq_type != 'ligand':
-        restype = unique_seqs[0]
-    else:
-        restype = map_seq_to_inds(seq.replace('-', 'X'), seq_type)
-
-    unique_seqs_onehot = F.one_hot(unique_seqs, num_classes=31)
-    deletion_count_matrix = torch.tensor(deletion_count_matrix).float()
-    res_distribution = unique_seqs_onehot.float().mean(dim=0)
-
-    deletion_mean = deletion_count_matrix.mean(dim=0)
-    has_deletion = torch.clip(deletion_count_matrix, min=0, max=1)
-    deletion_value = (2/torch.pi) * torch.arctan(deletion_count_matrix/3)
-
-    return { 'restype': restype, 'msa': unique_seqs, 'deletion_value': deletion_value, 'profile': res_distribution, 'deletion_mean': deletion_mean, 'has_deletion': has_deletion }
-
-def process_msa_file(filename, seq_type):
-    seqs = load_a3m_file(filename)
-    data = initial_data_from_seqs(seqs, seq_type)
-    return data
-
-def empty_msa(seq, seq_type):
-    return initial_data_from_seqs([seq], seq_type)
-    
+    def forward(self, data):
+        for chain_id, msa_data in data['polymer_msas_by_chain_id'].items():
+            data['polymer_msas_by_chain_id'][chain_id]['msa'] = self.lookup_table[msa_data['msa']]
+        return data
 
 
 
+class DeduplicateMSA(Transform):
+    def __init__(self):
+        ...
 
-def deduplicate_unpaired(unpaired_msa, paired_msa):
-    hashes = set(hash(a.tobytes()) for a in paired_msa['msa'].numpy().astype(np.int8))
-    inds_to_keep = []
-    for i, row in enumerate(unpaired_msa['msa'].numpy().astype(np.int8)):
-        if not hash(row.tobytes()) in hashes:
-            inds_to_keep.append(i)
+    def forward(self, data):
+        polymer_msas = data['polymer_msas_by_chain_id']
 
-    for feat in ['msa', 'deletion_value', 'has_deletion']:
-        unpaired_msa[feat] = unpaired_msa[feat][inds_to_keep]
+        for chain_id in polymer_msas:
+            _, unique_inds, inv = np.unique(polymer_msas[chain_id]['msa'], axis=0, return_index=True,
+                                            return_inverse=True)
+            unique_inds = np.sort(unique_inds)
+            for k, v in polymer_msas[chain_id].items():
+                polymer_msas[chain_id][k] = v[unique_inds]
 
-    return unpaired_msa
+        return data
 
-def merge_unpaired_paired(unpaired_msa, paired_msa, max_row_count, deduplicate=True):
-    if deduplicate:
-        unpaired_msa = deduplicate_unpaired(unpaired_msa, paired_msa)
+class ConcatMSAs(Transform):
+    def __init__(self, max_msa_sequences=16384):
+        self.max_msa_sequences = max_msa_sequences
 
-    unpaired_row_count = unpaired_msa['msa'].shape[0]
-    paired_row_count = paired_msa['msa'].shape[0]
-    max_paired_size = min(max_row_count//2, paired_row_count)
-    max_unpaired_size = min(max_row_count - max_paired_size, unpaired_row_count)
+    def forward(self, data):
+        polymer_msas = data['polymer_msas_by_chain_id']
+        atom_array = data['atom_array']
 
-    merged_features = {**unpaired_msa}
+        max_msa_size = max(msa_data['msa'].shape[0] for msa_data in polymer_msas.values())
+        token_count = get_token_count(atom_array)
+        padded_token_count = round_to_bucket(token_count)
 
-    for feat in ['msa', 'deletion_value', 'has_deletion']:
-        unpaired_feat = unpaired_msa[feat][:max_unpaired_size, ...]
-        paired_feat = paired_msa[feat][:max_paired_size, ...]
-        merged_features[feat] = torch.cat((paired_feat, unpaired_feat), dim=0)
+        full_msa = np.zeros((self.max_msa_sequences, padded_token_count), dtype=np.int64)
+        deletion_count = np.zeros((self.max_msa_sequences, padded_token_count), dtype=np.float32)
+        full_msa_mask = np.zeros((self.max_msa_sequences, padded_token_count), dtype=np.float32)
+        individual_msa_mask = np.zeros((self.max_msa_sequences, padded_token_count), dtype=np.float32)
 
-    return merged_features
+        full_msa[:max_msa_size, :token_count] = AF3_TOKENS_MAP['<G>']
+        full_msa_mask[:max_msa_size, :token_count] = 1
 
+        full_msa[0] = data['token_features']['restype']
+        full_msa_mask[0, :token_count] = 1
+        individual_msa_mask[0, :token_count] = 1
 
-def merge_msa_features(msa_data_list, padded_row_count=None, padded_col_count=None):
-    pad_values = {
-        'msa': id_maps['protein']['-'],
-        'deletion_value': 0,
-        'has_deletion': 0,
-    }
+        tokens = data['atom_array'][get_token_starts(data['atom_array'])]
+        chain_borders = get_chain_instance_starts(tokens, add_exclusive_stop=True)
+        chain_starts, chain_ends = chain_borders[:-1], chain_borders[1:]
 
-    row_dim_feats = ['msa', 'deletion_value', 'has_deletion']
-    non_row_feats = ['profile', 'deletion_mean', 'restype']
-    all_feats = row_dim_feats + non_row_feats
+        for chain_start, chain_end in zip(chain_starts, chain_ends):
+            chain_id = tokens.chain_id[chain_start]
+            if chain_id in polymer_msas:
+                chain_tokens = tokens[chain_start:chain_end]
 
-    max_rows = max(msa_data['msa'].shape[0] for msa_data in msa_data_list)
-    token_count = sum(msa_data['profile'].shape[0] for msa_data in msa_data_list)
+                atomizing_starts = np.nonzero(~chain_tokens.atomize[1:] | ~chain_tokens.atomize[:-1])[0] + 1
+                atomizing_starts = np.concatenate(([0], atomizing_starts)) + chain_start
+                msa_to_fill = polymer_msas[chain_id]['msa']
+                ins_to_fill = polymer_msas[chain_id]['ins']
+                msa_mask_to_fill = ~polymer_msas[chain_id]['msa_is_padded_mask']
 
-    if padded_row_count is None:
-        padded_row_count = max_rows
-    if padded_col_count is None:
-        padded_col_count = token_count
+                full_msa[:msa_to_fill.shape[0], atomizing_starts] = msa_to_fill
+                deletion_count[:ins_to_fill.shape[0], atomizing_starts] = ins_to_fill
+                individual_msa_mask[:msa_mask_to_fill.shape[0], atomizing_starts] = msa_mask_to_fill
 
-    for msa_data in msa_data_list:
-        for key in row_dim_feats:
-            padded_shape = (max_rows,) + msa_data[key].shape[1:]
-            msa_data[key] = utils.crop_pad_to_shape(msa_data[key], padded_shape, pad_values[key])
+        data['msa_features'] = {
+            'msa': full_msa,
+            'deletion_count': deletion_count,
+            'full_msa_mask': full_msa_mask,
+            'individual_msa_mask': individual_msa_mask,
+        }
 
-    joined_data = dict()
+        return data
 
-    for key in all_feats:
-        if key in row_dim_feats:
-            joined_data[key] = torch.cat([msa_data[key] for msa_data in msa_data_list], dim=1)
-        else:
-            joined_data[key] = torch.cat([msa_data[key] for msa_data in msa_data_list], dim=0)
+class EncodeMSAFeatures(Transform):
+    def __init__(self, msa_trunc_count=1024, msa_shuffle_orders=None, n_recycling_iterations=1):
+        self.msa_trunc_count = msa_trunc_count
+        self.msa_shuffle_orders = msa_shuffle_orders
+        self.n_recycling_iterations = n_recycling_iterations
 
-    joined_data['msa_mask'] = torch.ones(joined_data['msa'].shape)
-    row_dim_feats.append('msa_mask')
+    def forward(self, data):
+        deletion_count = data['msa_features']['deletion_count']
+        msa = data['msa_features']['msa']
+        full_msa_mask = data['msa_features']['full_msa_mask']
+        individual_msa_mask = data['msa_features']['individual_msa_mask']
+        restype = data['token_features']['restype']
 
-    for key in joined_data.keys():
-        if key in row_dim_feats:
-            padded_shape = (padded_row_count, padded_col_count) + joined_data[key].shape[2:]
-        else:
-            padded_shape = (padded_col_count,) + joined_data[key].shape[1:]
+        deletion_mean = utils.masked_mean_np(deletion_count, individual_msa_mask, axis=0)
+        deletion_value = (2 / np.pi) * np.arctan(deletion_count / 3)
+        msa_one_hot = F.one_hot(torch.tensor(msa), num_classes=32).numpy()
+        profile = utils.masked_mean_np(msa_one_hot, individual_msa_mask[..., None], axis=0)
 
-        joined_data[key] = utils.pad_to_shape(joined_data[key], padded_shape, value=0)
+        deletion_value = deletion_value[..., None]
+        has_deletion = np.clip(deletion_count, a_min=0, a_max=1, dtype=np.float32)[..., None]
 
+        full_msa_feat = np.concatenate([msa_one_hot, has_deletion, deletion_value], axis=-1)
+        msa_feat, msa_mask = self.sample_msa_features(full_msa_feat, full_msa_mask, self.msa_shuffle_orders)
+        target_feat = self.calculate_target_feat(restype, profile, deletion_mean)
 
-    return joined_data
+        data['msa_features']['msa_feat'] = msa_feat
+        data['msa_features']['msa_mask'] = msa_mask
+        data['msa_features']['target_feat'] = target_feat
+        data['msa_features']['profile'] = profile
 
-def calculate_msa_feat(msa_features):
-    msa_one_hot = F.one_hot(msa_features['msa'], num_classes=32)
-    deletion_value = msa_features['deletion_value'][..., None]
-    has_deletion = msa_features['has_deletion'][..., None]
+        return data
 
-    msa_feat = [msa_one_hot, has_deletion, deletion_value]
-    msa_feat = torch.cat(msa_feat, dim=-1)
+    def calculate_target_feat(self, restype, profile, deletion_mean):
+        restype_one_hot = F.one_hot(torch.tensor(restype), num_classes=32).numpy()
 
-    return msa_feat
+        target_feat = np.concatenate((restype_one_hot, profile, deletion_mean[..., None]), axis=-1)
+        return target_feat
 
-def sample_n_msa_feats(base_msa_feat, base_msa_mask, n, msa_trunc_count=1024, msa_shuffle_orders = None):
-        msa_feats = []
-        msa_masks = []
+    def sample_msa_features(self, base_msa_feat, base_msa_mask, msa_shuffle_orders):
+        has_entries = np.clip(np.sum(base_msa_mask, axis=-1), a_min=0, a_max=1)
+        odds = (has_entries - 1) * -1e2
 
-        batch_shape = base_msa_feat.shape[:-3]
+        if self.msa_shuffle_orders is None:
+            scores_shape = (self.n_recycling_iterations,) + odds.shape
+            scores = odds + torch.distributions.Gumbel(0, 1).sample(scores_shape).numpy()
+            msa_shuffle_orders = np.argsort(scores, axis=-1)
 
-        for i in range(n):
-            if msa_shuffle_orders is not None:
-                msa_shuffle_order = msa_shuffle_orders[i]
-            else:
-                has_entries = torch.clip(msa_mask.sum(dim=-1), 0, 1)
-                odds = (has_entries - 1) * -1e2
-                scores = odds + torch.distributions.Gumbel(0, 1).sample(odds.shape)
-                msa_shuffle_order = torch.argsort(scores, dim=-1)
+        msa_indices = msa_shuffle_orders[:, :self.msa_trunc_count]
+        msa_feat = base_msa_feat[msa_indices]
+        msa_mask = base_msa_mask[msa_indices]
 
-            msa_indices = msa_shuffle_order[..., :msa_trunc_count]
-            msa_feat = utils.batched_gather(base_msa_feat, msa_indices, batch_shape)
-            msa_mask = utils.batched_gather(base_msa_mask, msa_indices, batch_shape)
-
-            msa_feats.append(msa_feat)
-            msa_masks.append(msa_mask)
-
-        msa_feat = torch.stack(msa_feats, dim=-1)
-        msa_mask = torch.stack(msa_masks, dim=-1)
+        msa_feat = np.moveaxis(msa_feat, 0, -1)
+        msa_mask = np.moveaxis(msa_mask, 0, -1)
 
         return msa_feat, msa_mask
 
-def calculate_target_feat(msa_features):
-        restype = msa_features['restype']
-        restype_1h = F.one_hot(restype, 31)
-        profile = msa_features['profile']
-        deletion_mean = msa_features['deletion_mean'][..., None]
 
-        target_feat = torch.cat((restype_1h, profile, deletion_mean), dim=-1)
-        return target_feat
+
+class CalculateMSAFeatures(Transform):
+    def __init__(self, protein_msa_dirs=None, rna_msa_dirs=None, max_msa_sequences=16384, msa_trunc_count=1024, msa_shuffle_orders=None, n_recycling_iterations=1):
+        self.transforms = Compose([
+            LoadPolymerMSAs(
+                protein_msa_dirs=protein_msa_dirs,
+                rna_msa_dirs=rna_msa_dirs,
+                max_msa_sequences=max_msa_sequences,
+                use_paths_in_chain_info=True,
+            ),
+            DeduplicateMSA(),
+            HotfixDuplicateRowIfSingleMSA(),
+            EncodeMSA(),
+            # PairAndMergePolymerMSAs(dense=True),
+            ConcatMSAs(max_msa_sequences=max_msa_sequences),
+            HotfixEncodeRNAAsProtein(),
+            HotfixAF3LigandAsGap(),
+            EncodeMSAFeatures(msa_trunc_count, msa_shuffle_orders, n_recycling_iterations)
+        ])
+
+    def forward(self, data: dict):
+        data = self.transforms(data)
+
+        return data
 
 

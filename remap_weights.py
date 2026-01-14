@@ -7,6 +7,7 @@ import torch
 import tqdm
 import zstandard as zstd
 
+
 def create_atom_att_encoder(jax_base, jax_sub, pytorch_base, use_trunk=False):
     name_map_att_enc = {
         f'{jax_base}/{jax_sub}_embed_ref_pos': {
@@ -174,6 +175,7 @@ def create_atom_att_encoder(jax_base, jax_sub, pytorch_base, use_trunk=False):
 
     return name_map_att_enc
 
+
 name_map_input_embedder = {
     'diffuser/evoformer/left_single': {
         'weights': 'evoformer.input_embedder.left_single.weight',
@@ -253,7 +255,6 @@ name_map_msa_module = {
         # torch.Size([4, 128, 8])
         'weights': 'evoformer.msa_module.blocks.XXX.msa_pair_weighted.linear_b.weight'
     },
-
 
     'diffuser/evoformer/__layer_stack_no_per_layer/msa_stack/msa_attention1/act_norm': {
         'split': 'XXX',
@@ -795,7 +796,6 @@ name_map_pairformer = {
         'weights': 'evoformer.pairformer.blocks.XXX.att_pair_bias.linear_out.weight',
     },
 
-
     # Transition (Outside Core)
     'diffuser/evoformer/__layer_stack_no_per_layer_1/trunk_pairformer/single_transition/input_layer_norm': {
         'split': 'XXX',
@@ -1209,8 +1209,6 @@ name_map_diffusion_basic = {
     },
 }
 
-
-
 name_map_diffusion_transformer = {
     'diffuser/~/diffusion_head/transformer/__layer_stack_with_per_layer/__layer_stack_with_per_layer/transformersingle_cond_scale': {
         'split': 'XXX',
@@ -1370,7 +1368,6 @@ name_map_atom_att_dec = {
         'bias': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.linear_q.bias',
     },
 
-
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderksingle_cond_layer_norm': {
         'split': 'XXX',
         'scale': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.layer_norm_k.single_cond_layer_norm.weight',
@@ -1465,9 +1462,10 @@ name_map_atom_att_dec = {
     },
 }
 
-
-name_map_input_cross_att = create_atom_att_encoder('diffuser', 'evoformer_conditioning', 'evoformer.input_embedder.atom_cross_att')
-name_map_diff_cross_att = create_atom_att_encoder('diffuser/~/diffusion_head', 'diffusion', 'diffusion_module.atom_att_enc', use_trunk=True)
+name_map_input_cross_att = create_atom_att_encoder('diffuser', 'evoformer_conditioning',
+                                                   'evoformer.input_embedder.atom_cross_att')
+name_map_diff_cross_att = create_atom_att_encoder('diffuser/~/diffusion_head', 'diffusion',
+                                                  'diffusion_module.atom_att_enc', use_trunk=True)
 
 global_name_map = {
     **name_map_input_cross_att,
@@ -1485,49 +1483,51 @@ global_name_map = {
     **name_map_atom_att_dec,
 }
 
-    
+
 def preprocess_transformer(jax_params):
     transformer_keys = set(key.split('#')[0] for key in name_map_diffusion_transformer.keys())
 
     for key in transformer_keys:
         sub_params = jax_params[key]
         sub_params_to_split = [a for a in [
-                'weights', 'offset', 'bias', 'scale', 'output_b', 'output_w'] if a in sub_params.keys()]
+            'weights', 'offset', 'bias', 'scale', 'output_b', 'output_w'] if a in sub_params.keys()]
 
         for sub_key in sub_params_to_split:
             val = sub_params[sub_key]
             if 'pair_logits_projection' in key:
-                val = val.permute(0,2,1,3)
+                val = val.permute(0, 2, 1, 3)
             if 'pair_input_layer_norm' in key:
                 # Note: These parameters are shared in the AF3 code, but not in the paper
                 val = val.expand(6, 4, -1)
             val = val.flatten(start_dim=0, end_dim=1)
             sub_params[sub_key] = val
 
-def preprocess_atom_transformer(jax_params):
-    markers_layernorm = ['atom_transformer_decoder/pair_input_layer_norm', 'atom_transformer_encoder/pair_input_layer_norm']
-    markers_projection = ['atom_transformer_decoder/pair_logits_projection', 'atom_transformer_encoder/pair_logits_projection']
 
-    pair_projection_keys = set(key.split('#')[0] for key in global_name_map if any(m in key for m in markers_projection))
+def preprocess_atom_transformer(jax_params):
+    markers_layernorm = ['atom_transformer_decoder/pair_input_layer_norm',
+                         'atom_transformer_encoder/pair_input_layer_norm']
+    markers_projection = ['atom_transformer_decoder/pair_logits_projection',
+                          'atom_transformer_encoder/pair_logits_projection']
+
+    pair_projection_keys = set(
+        key.split('#')[0] for key in global_name_map if any(m in key for m in markers_projection))
     pair_layernorm_keys = set(key.split('#')[0] for key in global_name_map if any(m in key for m in markers_layernorm))
 
     for key in pair_projection_keys:
         sub_params = jax_params[key]
         # New Order: N_blocks, c_in, N_heads
         sub_params['weights'] = sub_params['weights'].permute(1, 0, 2)
-    
+
     for key in pair_layernorm_keys:
         sub_params = jax_params[key]
         # Note: These parameters are shared in the AF3 code, but not in the paper
         sub_params['scale'] = sub_params['scale'].expand(3, -1)
 
 
-
-
-
 def preprocessing(name_map, jax_params):
     preprocess_transformer(jax_params)
     preprocess_atom_transformer(jax_params)
+
 
 def post_processing(params):
     to_cat = [
@@ -1563,9 +1563,11 @@ def apply_index(w, index_list):
         w = w[index]
     return w
 
+
 def rreplace(s, old, new, maxcount):
     li = s.rsplit(old, maxcount)
     return new.join(li)
+
 
 def split_layer_stack(name_map, params):
     new_entries = dict()
@@ -1609,6 +1611,71 @@ def add_fourier_params(weights):
     weights[b_key] = torch.load(b_path, weights_only=False)
 
 
+def fix_input_feature_ordering(weights):
+    tf_emb_names = [
+        'evoformer.input_embedder.single_embedding.weight',
+        'evoformer.input_embedder.left_single.weight',
+        'evoformer.input_embedder.right_single.weight',
+        'evoformer.msa_module.linear_s.weight',
+        'diffusion_module.diffusion_conditioning.linear_s.weight',
+        'diffusion_module.diffusion_conditioning.layer_norm_s.weight',
+    ]
+    tf_emb_after_s_trunk = [
+        'diffusion_module.diffusion_conditioning.linear_s.weight',
+        'diffusion_module.diffusion_conditioning.layer_norm_s.weight',
+    ]
+    mf_emb_names = [
+        'evoformer.msa_module.linear_m.weight',
+    ]
+
+    # target_feat = np.concatenate((restype_one_hot, profile, deletion_mean[..., None]), axis=-1)
+    token_enc_shift = {
+                        i: i for i in range(31)
+                    } | {
+                        23: 24,
+                        24: 23,
+                        26: 27,
+                        27: 29,
+                        28: 28,
+                        29: 30,
+                        30: 26,
+                    }
+
+    for param_name in tf_emb_names:
+        param = weights[param_name]
+        offset = 384 if param_name in tf_emb_after_s_trunk else 0
+        if param.ndim == 2:
+            new_shape = (param.shape[0], param.shape[1]+2)
+            new_param = torch.zeros(new_shape)
+            new_param[:, :offset] = param[:, :offset]
+            new_param[:, offset+64:] = param[:, offset+62:]
+            for i_old, i_new in token_enc_shift.items():
+                new_param[:, offset+i_new] = param[:, offset+i_old]
+                new_param[:, offset+i_new+32] = param[:, offset+i_old+31]
+        elif param.ndim == 1:
+            new_shape = (param.shape[0]+2,)
+            new_param = torch.zeros(new_shape)
+            new_param[:offset] = param[:offset]
+            new_param[offset+64:] = param[offset+62:]
+            for i_old, i_new in token_enc_shift.items():
+                new_param[offset+i_new] = param[offset+i_old]
+                new_param[offset+i_new + 32] = param[offset+i_old + 31]
+
+        weights[param_name] = new_param
+
+
+    for param_name in mf_emb_names:
+        param = weights[param_name]
+        new_shape = param.shape
+        new_param = torch.zeros(new_shape)
+        new_param[:, 32:] = param[:, 32:]
+        for i_old, i_new in token_enc_shift.items():
+            new_param[:, i_new] = param[:, i_old]
+        weights[param_name] = new_param
+
+    return weights
+
+
 def remap_params(weights):
     new_weights = dict()
     name_map = global_name_map
@@ -1638,8 +1705,10 @@ def remap_params(weights):
 
     post_processing(new_weights)
     add_fourier_params(new_weights)
+    fix_input_feature_ordering(new_weights)
 
     return new_weights
+
 
 def open_jax_params(filename, mode='rb'):
     '''
@@ -1650,6 +1719,7 @@ def open_jax_params(filename, mode='rb'):
         dctx = zstd.ZstdDecompressor()
         return dctx.stream_reader(f)
     return f
+
 
 def read_records(stream):
     while True:
@@ -1673,6 +1743,7 @@ def read_records(stream):
 
         yield scope, name, arr
 
+
 def load_jax_params(filename):
     if not filename.endswith('.bin.zst') and not filename.endswith('.bin'):
         raise ValueError('Filename should either end in ".bin" or ".zst".')
@@ -1690,13 +1761,10 @@ def load_jax_params(filename):
     return params
 
 
-
-
 def main():
     jax_weights = load_jax_params('data/params/af3.bin.zst')
     pytorch_weights = remap_params(jax_weights)
     torch.save(pytorch_weights, 'data/params/af3_pytorch.pt')
-
 
 
 if __name__ == '__main__':

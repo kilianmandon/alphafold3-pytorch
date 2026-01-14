@@ -1,0 +1,17 @@
+{
+    "name": "XXXX",
+    "sequences": [
+      {
+        "protein": {
+          "id": "A",
+          "sequence": "PIAQIHILEGRSDEQKETLIREVSEAISRSLDAPLTSVRVIITEMAKGHFGIGGELASK",
+          "unpairedMsaPath": "data/fold_inputs/alignments/alignment_tautomerase.a3m",
+          "pairedMsa": "",
+          "templates": []
+        }
+      }
+    ],
+    "modelSeeds": [1],
+    "dialect": "alphafold3",
+    "version": 2
+  }

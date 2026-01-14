@@ -1,128 +1,125 @@
-import copy
-import modelcif
+import time
+
+import numpy as np
 import rdkit
 import torch
+from atomworks.io.tools.rdkit import atom_array_from_rdkit, ccd_code_to_rdkit
+from atomworks.io.utils.ccd import get_available_ccd_codes
+from atomworks.io.utils.selection import get_residue_starts
+from atomworks.ml.transforms.base import Transform
+from atomworks.ml.transforms.rdkit_utils import ccd_code_to_rdkit_with_conformers, \
+    sample_rdkit_conformer_for_atom_array, generate_conformers
+from atomworks.ml.utils.token import get_token_count, get_token_starts
+from biotite.structure import AtomArray
 
-from feature_extraction.ccd import drop_atoms
-from feature_extraction.msa_features import crop_pad_to_shape, pad_to_shape
+import utils
+from atom_layout import AtomLayout
+from feature_extraction.feature_extraction import round_to_bucket
 
 
-class ReferenceStructure:
-    ref_structures = dict()
-    ref_space_uid = 0
+class CalculateRefStructFeatures(Transform):
 
-    @classmethod
-    def get_and_increase_uid_counter(cls):
-        current = cls.ref_space_uid
-        cls.ref_space_uid += 1
-        return current
+    def __init__(self):
+        ...
 
-    @staticmethod
-    def get_atoms(ccd, res_name, mask, positions, asym_unit, seq_id, leaving_atoms=[]):
-        # atoms = [a for a in mol.GetAtoms() if a.GetSymbol() != 'H' and a.GetProp('atom_name') not in leaving_atoms]
-        atoms = drop_atoms(ccd[res_name], drop_hydrogens=True)
-        atom_names = atoms['atom_id']
-        atom_elements = atoms['atom_type']
+    def check_input(self, data):
+        ...
 
-        atom_elements = [e for a, e in zip(atom_names, atom_elements) if a not in leaving_atoms]
-        atom_names = [a for a in atom_names if a not in leaving_atoms]
-
-        for idx, (atom_name, atom_type) in enumerate(zip(atom_names, atom_elements)):
-            if not mask[idx]:
-                continue
-
-            x,y,z = (a.item() for a in positions[idx])
-
-            yield modelcif.model.Atom(
-                asym_unit=asym_unit,
-                type_symbol=atom_type,
-                seq_id=seq_id,
-                atom_id=atom_name,
-                x=x, y=y, z=z,
-                het=False,
-                occupancy=1.00,
-            )
-
+    def prep_atom_chars(self, atom_names):
+        padded = np.strings.ljust(atom_names, width=4)
+        cropped = np.strings.slice(padded, 0, 4)
+        encoded = np.strings.encode(cropped, encoding='ascii')
+        return encoded.view(np.uint8).reshape(-1, 4) - 32
 
     @staticmethod
-    def calculate_data(res_name, ccd, pad=True):
-        mol = ccd[res_name]['mol']
+    def calculate_ref_positions(atom_array: AtomArray):
+        print('Starting ref positions...')
+        residue_borders = get_residue_starts(atom_array, add_exclusive_stop=True)
+        residue_starts, residue_ends = residue_borders[:-1], residue_borders[1:]
+        res_names = atom_array.res_name[residue_starts]
+        chain_iids = atom_array.chain_iid[residue_starts]
+        to_generate = list(set(zip(res_names, chain_iids)))
 
-        params = rdkit.Chem.AllChem.ETKDGv3()
-        params.randomSeed = 0
-        mol_copy = rdkit.Chem.Mol(mol)
-        conformer_id = rdkit.Chem.AllChem.EmbedMolecule(mol_copy, params)
-        conformer = mol_copy.GetConformer(conformer_id)
+        known_ccd_codes = get_available_ccd_codes() - { 'UNL' }
 
-        used_atom_data = drop_atoms(ccd[res_name], drop_hydrogens=True)
-        all_atom_data = dict()
+        cached_conformers = {}
+        cached_unknown_conformers = {}
 
-        for idx, atom in enumerate(mol_copy.GetAtoms()):
-            name = atom.GetProp('atom_name')
-            name_chars = torch.tensor([ord(c)-32 for c in name])
-            name_chars = pad_to_shape(name_chars, (4,))
+        ref_pos = np.zeros((len(atom_array), 3))
 
-            element = atom.GetAtomicNum()
-            charge = atom.GetFormalCharge()
-            coords = conformer.GetAtomPosition(idx)
-            pos = torch.tensor([coords.x, coords.y, coords.z])
+        for i, (res_name, chain_iid) in enumerate(zip(res_names, chain_iids)):
+            if res_name not in known_ccd_codes:
+                if res_name not in cached_unknown_conformers:
+                    res_atom_array = atom_array[residue_starts[i]:residue_ends[i]]
+                    cached_unknown_conformers[res_name] = sample_rdkit_conformer_for_atom_array(res_atom_array)
 
-            all_atom_data[name] = {
-                'ref_element': element,
-                'pos': pos,
-                'ref_charge': charge,
-                'ref_atom_name_chars': name_chars
-            }
+                conformer = cached_unknown_conformers[res_name]
+            else:
+                if (res_name, chain_iid) not in cached_conformers:
+                    # mol = ccd_code_to_rdkit_with_conformers(res_name, 1, timeout=None, seed=1, optimize=False, attempts_with_distance_geometry=1)
+                    mol = ccd_code_to_rdkit(res_name, hydrogen_policy='keep')
+                    annotations = mol._annotations
+                    order = np.argsort(annotations['atom_name'])
+                    mol = rdkit.Chem.RenumberAtoms(mol, order.tolist())
+                    mol._annotations = {
+                        k: v[order] for k, v in annotations.items()
+                    }
+                    mol = generate_conformers(mol, seed=1, optimize=False, attempts_with_distance_geometry=250, hydrogen_policy='keep')
+                    cached_conformers[(res_name, chain_iid)] = atom_array_from_rdkit(mol, conformer_id=0)
+                conformer = cached_conformers[(res_name, chain_iid)]
 
-        used_names = used_atom_data['atom_id']
-        all_elements = torch.tensor(
-            [all_atom_data[name]['ref_element'] for name in used_names])
-        all_pos = torch.stack([all_atom_data[name]['pos']
-                              for name in used_names], dim=0)
-        all_charges = torch.tensor(
-            [all_atom_data[name]['ref_charge'] for name in used_names])
-        all_atom_name_chars = torch.stack(
-            [all_atom_data[name]['ref_atom_name_chars'] for name in used_names], dim=0)
+            for j in range(residue_starts[i], residue_ends[i]):
+                matching_atom_idx = np.nonzero(conformer.atom_name == atom_array.atom_name[j])[0]
+                if len(matching_atom_idx) == 0:
+                    print('Warning: could not find matching atom for residue {}'.format(res_name))
+                else:
+                    ref_pos[j] = conformer.coord[matching_atom_idx]
 
-        full_data = {
-            'ref_element': all_elements,
-            'ref_pos': all_pos,
-            'ref_charge': all_charges,
-            'ref_atom_name_chars': all_atom_name_chars,
-            'ref_mask': torch.ones_like(all_elements),
+
+        return ref_pos
+
+
+    def forward(self, data: dict):
+        atom_array: AtomArray = data['atom_array']
+
+        residue_borders = get_residue_starts(atom_array, add_exclusive_stop=True)
+        residue_starts, residue_ends = residue_borders[:-1], residue_borders[1:]
+        ref_space_uid = np.arange(len(residue_starts))
+        _, closest_start = utils.round_down_to(np.arange(len(atom_array)), residue_starts, return_indices=True)
+        ref_space_uid = ref_space_uid[closest_start]
+
+
+
+        ref_struct = {
+            'ref_element': atom_array.atomic_number,
+            'ref_charge': atom_array.charge,
+            'ref_atom_name_chars': self.prep_atom_chars(atom_array.atom_name),
+            # 'atom_names': atom_array.atom_name,
+            'ref_pos': self.calculate_ref_positions(atom_array),
+            'ref_mask': np.ones_like(atom_array.atomic_number),
+            'ref_space_uid': ref_space_uid,
         }
 
-        if pad:
-            for key, val in full_data.items():
-                full_data[key] = crop_pad_to_shape(val, (24,)+val.shape[1:])
+        padded_token_count = round_to_bucket(get_token_count(atom_array))
+        padded_atom_count = padded_token_count * 24
+        atom_layout = AtomLayout.from_atom_array(atom_array, padded_token_count)
 
-        full_data['atom_names'] = used_names
+        N_blocks = padded_token_count * 24 // 32
 
-        return full_data
 
-    @classmethod
-    def get_ref_structure(cls, chain_id, res_name, ccd, pad=True, drop_atoms=[]):
-        if not (chain_id, res_name) in cls.ref_structures:
-            cls.ref_structures[(chain_id, res_name)] = cls.calculate_data(
-                res_name, ccd, pad)
+        for k, v in ref_struct.items():
+            padded_shape = (padded_atom_count,) + v.shape[1:]
+            v = utils.pad_to_shape_np(v, padded_shape)
 
-        ref_struct = copy.deepcopy(cls.ref_structures[(chain_id, res_name)])
-        ref_space_uid = cls.get_and_increase_uid_counter()
-        # ref_struct['ref_space_uid'] = ref_struct['ref_mask'] * ref_space_uid
-        ref_struct['ref_space_uid'] = torch.full_like(
-            ref_struct['ref_mask'], ref_space_uid)
+            n_feat_dims = len(v.shape) - 1
+            v_new_shape = (N_blocks, 32) + v.shape[1:]
+            v = atom_layout.queries_to_tokens(torch.tensor(v).reshape(v_new_shape), n_feat_dims=n_feat_dims).numpy()
 
-        for i, atom_name in enumerate(ref_struct['atom_names']):
-            if atom_name in drop_atoms:
-                ref_struct['ref_element'][i] = 0
-                ref_struct['ref_mask'][i] = 0
-                ref_struct['ref_charge'][i] = 0
-                ref_struct['ref_pos'][i, :] = 0
-                ref_struct['ref_atom_name_chars'][i, :] = 0
-                ref_struct['atom_names'][i] = ''
-                # ref_struct['ref_space_uid'][i] = 0
+            ref_struct[k] = v
 
-        filtered = {key: val for key, val in ref_struct.items()
-                    if key != 'atom_names'}
 
-        return filtered
+        ref_struct['atom_layout'] = atom_layout
+
+        data['ref_struct'] = ref_struct
+
+        return data

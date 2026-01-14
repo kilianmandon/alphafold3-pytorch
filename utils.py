@@ -2,7 +2,18 @@ import io
 import modelcif
 import modelcif.model
 import modelcif.dumper
+import numpy as np
 import torch
+
+from atom_layout import LayoutConversion, AtomLayout
+
+
+def pad_to_shape_np(data, padded_shape, value=0):
+    padded = np.full(padded_shape, fill_value=value, dtype=data.dtype, device=data.device)
+    inds = tuple(slice(i) for i in data.shape)
+    padded[inds] = data
+    return padded
+
 
 def pad_to_shape(data, padded_shape, value=0):
     padded = torch.full(padded_shape, fill_value=value, dtype=data.dtype, device=data.device)
@@ -14,6 +25,26 @@ def crop_pad_to_shape(data, padded_shape, value=0):
     inds = tuple(slice(min(i, j)) for i, j in zip(data.shape, padded_shape))
     data = data[inds]
     return pad_to_shape(data, padded_shape, value)
+
+def round_down_to(data, rounding_target, return_indices=False):
+    sorting_indices = np.argsort(rounding_target)[::-1]
+    target_inds = np.argmax(rounding_target[sorting_indices] <= data[..., None], axis=-1)
+    target_inds = sorting_indices[target_inds]
+
+    if return_indices:
+        return rounding_target[target_inds], target_inds
+    else:
+        return rounding_target[target_inds]
+
+def round_up_to(data, rounding_target, return_indices=False):
+    sorting_indices = np.argsort(rounding_target)
+    target_inds = np.argmax(rounding_target[sorting_indices] >= data[..., None], axis=-1)
+    target_inds = sorting_indices[target_inds]
+
+    if return_indices:
+        return rounding_target[target_inds], target_inds
+    else:
+        return rounding_target[target_inds]
 
 
 def batched_gather(feat, gather_inds, batch_shape):
@@ -31,6 +62,10 @@ def batched_gather(feat, gather_inds, batch_shape):
     feat_gathered = torch.gather(feat, len(batch_shape), gather_inds)
     return feat_gathered.reshape(out_shape)
 
+def masked_mean_np(feat, mask, axis, keepdims=False):
+    feat_sum = np.sum(feat * mask, axis=axis, keepdims=keepdims)
+    count = np.sum(mask, axis=axis, keepdims=keepdims)
+    return feat_sum / np.clip(count, a_min=1e-10, a_max=None)
 
 def masked_mean(feat, mask, dim, keepdim=False):
     feat_sum = (feat*mask).sum(dim=dim, keepdim=keepdim)
@@ -148,9 +183,9 @@ def move_to_device(obj, device):
         return [move_to_device(item, device) for item in obj]  
     elif isinstance(obj, tuple):  
         return tuple(move_to_device(item, device) for item in obj)  
-    elif hasattr(obj, "__dict__"):  
-        for attr in vars(obj):  
+    elif isinstance(obj, AtomLayout) or isinstance(obj, LayoutConversion):
+        for attr in vars(obj):
             setattr(obj, attr, move_to_device(getattr(obj, attr), device))
-        return obj  
+        return obj
     else:
         return obj

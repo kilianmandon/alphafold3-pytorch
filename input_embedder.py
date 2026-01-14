@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from atom_attention import AtomAttentionEncoder
 
 class InputEmbedder(nn.Module):
-    def __init__(self, c_z=128, c_s=384, tf_dim=447, rel_feat_dim=139):
+    def __init__(self, c_z=128, c_s=384, tf_dim=449, rel_feat_dim=139):
         super().__init__()
         self.left_single = nn.Linear(tf_dim, c_z, bias=False)
         self.right_single = nn.Linear(tf_dim, c_z, bias=False)

@@ -8,6 +8,9 @@ import utils
 from model import Model
 
 def diff(v1, v2, mask=None, atol=1e-3, rtol=1e-2):
+    v1 = torch.tensor(v1, dtype=torch.float32)
+    v2 = torch.tensor(v2, dtype=torch.float32)
+
     if mask is not None:
         v1 = v1 * mask
         v2 = v2 * mask
@@ -174,7 +177,7 @@ def main():
 
     t1 = time.time()
 
-    inp = Input.load_input('data/fold_input_lysozyme.json', ccd)
+    inp = Input.load_input('data/fold_inputs/fold_input_lysozyme.json', ccd)
     t2 = time.time()
     print(f'Input loading: {t2-t1:.1f} seconds.')
     batch = inp.create_batch(msa_shuffle_orders=msa_shuffle_order)

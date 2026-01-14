@@ -12,9 +12,9 @@ from input_embedder import InputEmbedder
 
 class Evoformer(nn.Module):
     # AF: N_cycle=11
-    def __init__(self, N_cycle=11, c_s=384, c_z=128, msa_feat_dim=34, tf_dim=447):
+    def __init__(self, N_cycle=11, c_s=384, c_z=128, msa_feat_dim=34, tf_dim=449):
         super().__init__()
-        self.input_embedder = InputEmbedder(c_s=c_s, c_z=c_z)
+        self.input_embedder = InputEmbedder(c_s=c_s, c_z=c_z, tf_dim=tf_dim)
 
         self.layer_norm_prev_z = nn.LayerNorm(c_z)
         self.prev_z_embedding = nn.Linear(c_z, c_z, bias=False)

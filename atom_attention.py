@@ -203,9 +203,9 @@ class AtomAttentionEncoder(nn.Module):
             return torch.nonzero((t1-t2).abs() > 1e-3).numpy()
 
         mask = flat_ref_struct['ref_mask'][..., None].to(torch.float32)
-        element = flat_ref_struct['ref_element']
+        element = flat_ref_struct['ref_element'].long()
         charge = flat_ref_struct['ref_charge'][..., None].to(torch.float32)
-        name_chars = flat_ref_struct['ref_atom_name_chars']
+        name_chars = flat_ref_struct['ref_atom_name_chars'].long()
         elements_1h = nn.functional.one_hot(element, 128).to(torch.float32)
         atom_names_1h = nn.functional.one_hot(name_chars, 64).to(torch.float32)
         atom_names_1h = atom_names_1h.reshape(atom_names_1h.shape[:-2] + (-1,))
