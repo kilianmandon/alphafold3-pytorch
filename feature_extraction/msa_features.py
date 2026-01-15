@@ -7,6 +7,8 @@ from atomworks.ml.transforms.msa._msa_constants import MSA_INTEGER_TO_THREE_LETT
 from atomworks.ml.transforms.msa.msa import LoadPolymerMSAs, PairAndMergePolymerMSAs
 from atomworks.ml.utils.token import get_token_count, get_token_starts
 
+import tensortrace as ttr
+
 from torch.nn import functional as F
 import utils
 from residue_constants import AF3_TOKENS_MAP, _PROTEIN_TO_ID
