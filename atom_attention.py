@@ -1,6 +1,7 @@
 import math
 import torch
 from torch import nn
+import tensortrace as ttr
 
 from common import AdaptiveLayerNorm, AdaptiveZeroInit, ConditionedTransitionBlock
 import utils
@@ -128,11 +129,19 @@ class AtomAttentionEncoder(nn.Module):
         queries_ref_space_uid = atom_layout.tokens_to_queries(
             ref_struct['ref_space_uid'], 0)
 
+        # queries_single_cond = ttr.compare(queries_single_cond, 'queries_act_0_input')
+
         # Note: Correct indexing would look like this
         # keys_ref_space_uid = atom_layout.tokens_to_keys(ref_struct['ref_space_uid'], 0)
+        # Thats problematic in some senses, for example, values that are masked in the 
+        # token space ref_space_uid are at unmasked positions in keys_ref_space_uid
         # But we follow Deepminds implementation:
         keys_ref_space_uid = atom_layout.queries_to_keys(
             ref_struct['ref_space_uid'], 0)
+
+        # ttr.compare(queries_ref_space_uid, 'q_ref_space_uid')
+        # ttr.compare(keys_ref_space_uid, 'k_ref_space_uid')
+        # ttr.compare(ref_struct['ref_space_uid'], 'ref_space_uid')
 
         queries_ref_pos = atom_layout.tokens_to_queries(
             ref_struct['ref_pos'], 1)
@@ -165,10 +174,25 @@ class AtomAttentionEncoder(nn.Module):
         row_act = self.single_to_pair_row(torch.relu(queries_single_cond))
         col_act = self.single_to_pair_col(torch.relu(keys_single_cond))
         pair_act += row_act[:, :, None, :] + col_act[:, None, :, :]
+        # pair_act = ttr.compare(pair_act, 'pair_act_2_pair_dist')
 
+        # Debug block
+        # p1 = row_act[:, :, None, :] + col_act[:, None, :, :]
+        # p2 = p1 + self.embed_pair_offsets(offsets) * offsets_valid
+        # p3 = p2 + self.embed_pair_distances(1/(1+sq_dists)) * offsets_valid
+        # p4 = p3 + self.embed_pair_mask(offsets_valid)
+        # ttr.compare(offsets, 'offsets')
+        # ttr.compare(offsets_valid.squeeze(), 'offsets_valid')
+        # ttr.compare(p1, 'pair_act_0_from_single')
+        # ttr.compare(p2, 'pair_act_1_offsets')
+        # ttr.compare(p3, 'pair_act_2_pair_dist')
+        # ttr.compare(p4, 'pair_act_3_offsets_valid')
+        # End
         pair_act += self.embed_pair_mask(offsets_valid)
+        # pair_act = ttr.compare(pair_act, 'pair_act_3_offsets_valid')
 
         pair_act += self.pair_mlp(pair_act)
+        # pair_act = ttr.compare(pair_act, 'pair_act_4_mlp')
 
         queries_act = self.atom_transformer(
             queries_act,
@@ -176,17 +200,14 @@ class AtomAttentionEncoder(nn.Module):
             queries_single_cond,
             pair_act
         )
+        # queries_act = ttr.compare(queries_act, 'queries_act_1_cross_att')
 
         queries_act *= queries_mask[..., None]
 
         token_act = atom_layout.queries_to_tokens(queries_act, 1)
         token_act = torch.relu(self.project_atom_features(token_act))
 
-        # atom_count_per_res = torch.sum(ref_struct['ref_mask'], dim=-1)
-        # atom_count_per_res = atom_count_per_res[..., None]
-
-        # token_act = token_act.sum(
-            # dim=-2) / torch.clip(atom_count_per_res, min=1e-10)
+        
         token_act = utils.masked_mean(token_act, ref_struct['ref_mask'][..., None], dim=-2)
 
         skip = (queries_act, queries_single_cond, pair_act)

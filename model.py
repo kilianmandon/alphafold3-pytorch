@@ -4,6 +4,7 @@ import torch
 from evoformer import Evoformer
 from diffusion import DiffusionModule, DiffusionSampler
 import utils
+import tensortrace as ttr
 
 class Model(nn.Module):
     def __init__(self, N_cycle=11, noise_steps=30):
@@ -16,11 +17,13 @@ class Model(nn.Module):
         ref_struct = batch['ref_struct']
         single_mask = batch['token_features']['single_mask']
 
-        s_input, s_trunk, z_trunk, rel_enc = self.evoformer(batch)
+        with ttr.Chapter('evoformer'):
+            s_input, s_trunk, z_trunk, rel_enc = self.evoformer(batch)
 
-        x_flat = self.diffusion_sampler(self.diffusion_module,
-                               s_input, s_trunk, z_trunk, rel_enc, 
-                               ref_struct, single_mask)
+        with ttr.Chapter('diffusion'):
+            x_flat = self.diffusion_sampler(self.diffusion_module,
+                                s_input, s_trunk, z_trunk, rel_enc, 
+                                ref_struct, single_mask)
 
         atom_layout = ref_struct['atom_layout']
         token_mask = ref_struct['ref_mask']

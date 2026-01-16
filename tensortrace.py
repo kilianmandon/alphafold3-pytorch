@@ -1,12 +1,13 @@
 from dataclasses import dataclass, field
 from enum import Enum
 import json
+import math
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import numpy as np
 
-def diff(v1, v2, mask=None, atol=1e-3, rtol=1e-2):
+def diff(v1, v2, mask=None, atol=1e-2, rtol=1e-3):
     if mask is not None:
         v1 = v1 * mask
         v2 = v2 * mask
@@ -50,6 +51,7 @@ class DiskTensorSpec:
     tensor_files: list[str] = field(default_factory=list)
     mask_files: list[Optional[str]] = field(default_factory=list)
     from_this_session: bool = False
+    stack_shape: tuple = ()
 
 _CURRENT_TRACE = None
 
@@ -86,6 +88,14 @@ class TensorTrace:
         self.specs: dict[str, DiskTensorSpec] = {}
         self.loading_index: dict[str, DiskTensorSpec] = {}
 
+        self.context = {}
+
+    def set_context(self, name, value):
+        self.context[name] = value
+
+    def get_context(self, name):
+        return self.context[name]
+
     def add_chapter(self, name: str):
         self.chapters.append(name)
     
@@ -93,7 +103,7 @@ class TensorTrace:
         assert self.chapters[-1] == name
         self.chapters.pop(-1)
 
-    def load_tensor(self, name: str, with_mask=False, silent_loop=True):
+    def load_single_tensor(self, name: str, with_mask=False, silent_loop=True):
         i = self.loading_index.get(name, 0)
 
         if i >= len(self.specs[name].tensor_files):
@@ -104,16 +114,61 @@ class TensorTrace:
 
         self.loading_index[name] = i + 1
 
-        tensor_filename = self.specs[name].tensor_files[i]
+        tensor_filename = self.base_path / self.specs[name].tensor_files[i]
         mask_filename = self.specs[name].mask_files[i]
 
-        tensor = _from_numpy(np.load(tensor_filename), self.framework)
+        tensor = np.load(tensor_filename)
 
         if not with_mask:
             return tensor
         else:
-            mask = None if mask_filename is None else _from_numpy(np.load(mask_filename), self.framework)
+            if mask_filename is not None:
+                mask = np.load(self.base_path / mask_filename)
+            else:
+                mask = None
+            
             return tensor, mask
+
+    def load_tensor(self, name: str, with_mask=False, silent_loop=True, load_single=False):
+        stack_shape = self.specs[name].stack_shape
+        if len(stack_shape)==0 or load_single:
+            if with_mask:
+                tensor, mask = self.load_single_tensor(name, with_mask, silent_loop)
+                tensor = _from_numpy(tensor, self.framework)
+                if mask is not None:
+                    mask = _from_numpy(mask, self.framework)
+                return tensor, mask
+            else:
+                tensor = self.load_single_tensor(name, with_mask, silent_loop)
+                return _from_numpy(tensor, self.framework)
+
+        n = math.prod(stack_shape)
+        tensors = []
+        masks = []
+        for i in range(n):
+            res = self.load_single_tensor(name, with_mask, silent_loop)
+            if with_mask:
+                tensors.append(res[0])
+                masks.append(res[1])
+            else:
+                tensors.append(res)
+        
+        tensors = np.stack(tensors, axis=0).reshape(stack_shape + list(tensors[0].shape))
+        tensors = _from_numpy(tensors, self.framework)
+
+        if not with_mask:
+            return tensors
+
+        if masks[0] is None:
+            return tensors, None
+        
+        masks = np.stack(masks, axis=0).reshape(stack_shape + masks[0].shape)
+        masks = _from_numpy(masks, self.framework)
+        return tensors, masks
+
+        
+
+    
         
 
     def load_data(self):
@@ -121,7 +176,7 @@ class TensorTrace:
             index = json.load(f)
 
         self.specs = {
-            data['name']: DiskTensorSpec(data['name'], data['tensor_files'], data['mask_files'])
+            data['name']: DiskTensorSpec(data['name'], data['tensor_files'], data['mask_files'], False, data['stack_shape'])
             for data in index['tensors']
         }
 
@@ -131,6 +186,7 @@ class TensorTrace:
             'tensors': [
                 {
                     'name': name,
+                    'stack_shape': spec.stack_shape,
                     'tensor_files': spec.tensor_files,
                     'mask_files': spec.mask_files,
                 }
@@ -157,17 +213,25 @@ class TensorTrace:
         print('Done')
 
 
-    def log(self, value: Union[Any, dict[str, Any]], name: str='', mask: Optional[Any]=None, overwrite=True):
+    def get_base_name(self):
+        if len(self.chapters) > 0:
+            return '/'.join(self.chapters) + '/'
+        else:
+            return ''
+
+    def log(self, value: Union[Any, dict[str, Any]], name: str='', mask: Optional[Any]=None, overwrite=True, stack_shape: tuple =(), no_chapters=False):
         entries = _unify_log_format(value, name, mask)
 
-        base_name = '/'.join(self.chapters)
-        base_name = '' if base_name == '' else f'{base_name}/'
+        if no_chapters:
+            base_name = ''
+        else:
+            base_name = self.get_base_name()
 
         for name, ts in entries.items():
             full_name = base_name + name
 
             if full_name not in self.specs or (overwrite and not self.specs[full_name].from_this_session):
-                self.specs[full_name] = DiskTensorSpec(full_name, from_this_session=True)
+                self.specs[full_name] = DiskTensorSpec(full_name, from_this_session=True, stack_shape=stack_shape)
 
             dts = self.specs[full_name]
             n = len(dts.tensor_files)
@@ -176,21 +240,21 @@ class TensorTrace:
             tensor_path = self.tensor_dir / f'{full_name}.{n}.npy'
             tensor_path.parent.mkdir(exist_ok=True, parents=True)
             np.save(tensor_path, tensor_np)
-            dts.tensor_files.append(str(tensor_path))
+            dts.tensor_files.append(str(tensor_path.relative_to(self.base_path)))
             
             if ts.mask is not None:
                 mask_np = _to_numpy(ts.mask)
                 mask_path = self.mask_dir / f'{full_name}.{n}.npy'
                 mask_path.parent.mkdir(exist_ok=True, parents=True)
                 np.save(mask_path, mask_np)
-                dts.mask_files.append(str(mask_path))
+                dts.mask_files.append(str(mask_path.relative_to(self.base_path)))
             else:
                 dts.mask_files.append(None)
 
         self.save_index()
 
 
-    def load(self, name: str, processing: dict[str, list[Callable]]=None, expand_names=True, with_mask=False, silent_loop=True):
+    def load(self, name: str, processing: dict[str, list[Callable]]=None, expand_names=True, with_mask=False, silent_loop=True, load_single=False):
         processing = _unify_processing_format(processing, name)
 
         chapters_prefix = '/'.join(self.chapters) + '/' if len(self.chapters) > 0 else ''
@@ -198,7 +262,7 @@ class TensorTrace:
         full_name = f'{chapters_prefix}{name}'
         
         entries = {
-            k.removeprefix(chapters_prefix): self.load_tensor(k, with_mask=with_mask, silent_loop=silent_loop) for k in self.specs if k.startswith(full_name)
+            k.removeprefix(chapters_prefix): self.load_tensor(k, with_mask=with_mask, silent_loop=silent_loop, load_single=load_single) for k in self.specs if k.startswith(full_name)
         }
 
         entries = _apply_processing(entries, processing, apply_to_mask=True)
@@ -206,7 +270,6 @@ class TensorTrace:
         entries = {
             k.removeprefix(name_prefix): v for k, v in entries.items()
         }
-
 
 
         if len(entries) == 0:
@@ -239,13 +302,13 @@ class TensorTrace:
             return all_entries
 
 
-    def build_if_absent(self, name: str, builder: Callable):
+    def build_if_absent(self, name: str, builder: Callable, stack_shape=()):
         full_name = '/'.join(self.chapters + [name])
         matching_names = [k for k in self.specs if k.startswith(full_name)]
 
         if len(matching_names) == 0 or self.specs[matching_names[0]].from_this_session:
             data = builder()
-            self.log(data, name)
+            self.log(data, name, stack_shape=stack_shape)
 
         return self.load(name)
 
@@ -272,21 +335,34 @@ class TensorTrace:
                 raise KeyError(f'Object {k} not present in comparison target.')
 
             v2, mask = target[k]
-            v1 = _to_numpy(v1)
-            v2 = _to_numpy(v2)
+            v1 = _to_numpy(v1).astype(float)
+            v2 = _to_numpy(v2).astype(float)
             if mask is not None and use_mask_for_pair:
-                mask = _to_numpy(mask)
+                mask = _to_numpy(mask).astype(float)
                 mask = broadcast_mask(mask, v2)
                 v1 = v1 * mask
                 v2 = v2 * mask
 
-            di, da, dr = diff(v1, v2, mask)
+            di, da, dr = diff(v1, v2)
             da_max = da.max()
             dr_max = dr.max()
             combined_max = np.minimum(da, 10*dr).max()
             if di.size > 0:
                 print(f'Problems with {k}.')
+                print(f'Combined max: {combined_max}')
                 ...
+        
+        target_without_mask = {
+            k: v[0] for k, v in target.items()
+        }
+        if self.framework == 'pytorch':
+            input_device = list(value.values())[0].device
+            target_without_mask = { k: v.to(device=input_device) for k,v in target_without_mask.items()}
+
+        if len(target_without_mask) == 1:
+            target_without_mask = list(target_without_mask.values())[0]
+        return target_without_mask
+
 
             
 
@@ -351,7 +427,7 @@ def _unify_log_format(value: Union[Any, dict[str, Any]], name: str='', mask: Opt
 def _unify_processing_format(procs, name):
     if procs is not None:
         if isinstance(procs, dict):
-            procs = _collapse_nested_dict(procs, prefix=name)
+            procs = _collapse_nested_dict(procs)
         else:
             procs = { name: procs }
         
@@ -363,11 +439,16 @@ def _unify_processing_format(procs, name):
         procs = {}
     return procs
 
-def log(value: Union[Any, dict[str, Any]], name: str='', mask: Optional[Any]=None, overwrite=True):
-    current_trace().log(value, name, mask, overwrite)
+def log(value: Union[Any, dict[str, Any]], name: str='', mask: Optional[Any]=None, overwrite=True, stack_shape=(), no_chapters=False):
+    current_trace().log(value, name, mask, overwrite, stack_shape, no_chapters=no_chapters)
 
-def build_if_absent(name: str, builder: Callable):
-    return current_trace().build_if_absent(name, builder)
+def jax_debug_log(value: Any, name: str='', mask: Optional[Any]=None, stack_shape=()):
+    full_name = current_trace().get_base_name() + name
+    import jax
+    jax.debug.callback(lambda v, m: log(v, full_name, m, stack_shape=stack_shape, no_chapters=True), value, mask, ordered=True)
+
+def build_if_absent(name: str, builder: Callable, stack_shape=()):
+    return current_trace().build_if_absent(name, builder, stack_shape)
 
 def load(name: str, processing:Optional[dict|list|Callable]=None):
     return current_trace().load(name, processing)
@@ -376,9 +457,13 @@ def load_all(name: str='', processing: Optional[dict|list|Callable]=None):
     return current_trace().load_all(name, processing)
 
 def compare(value: (Any|dict[str, Any]), name: str, processing:Optional[dict|list|Any]=None, input_processing:Optional[dict|list]=None, use_mask: (dict|bool)=True):
-    current_trace().compare(value, name, processing, input_processing, use_mask)
+    return current_trace().compare(value, name, processing, input_processing, use_mask)
 
+def set_context(name, value):
+    current_trace().set_context(name, value)
 
+def get_context(name):
+    return current_trace().get_context(name)
 
 
 

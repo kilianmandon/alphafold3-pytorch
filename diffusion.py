@@ -28,22 +28,18 @@ class DiffusionModule(nn.Module):
         atom_layout = ref_struct['atom_layout']
 
         s, z = self.diffusion_conditioning(t_hat, s_inputs, s_trunk, z_trunk, rel_enc)
-        debug_data = utils.move_to_device(torch.load('tests/test_lysozyme/debug_diff_mod_cond.pt', weights_only=False), x_noisy.device)
         r=x_noisy / torch.sqrt(t_hat**2+self.sigma_data**2)[..., None, None, None]
 
 
         a, (q_skip, c_skip, p_skip) = self.atom_att_enc(ref_struct, r=r, s_trunk=s_trunk, z=z)
-        debug_data = utils.move_to_device(torch.load('tests/test_lysozyme/debug_diff_mod_att_enc.pt', weights_only=False), x_noisy.device)
 
 
         a += self.linear_s(self.layer_norm_s(s))
         a = self.diffusion_transformer(a, s, z, mask, atom_layout)
-        debug_data = utils.move_to_device(torch.load('tests/test_lysozyme/debug_diff_mod_transformer.pt', weights_only=False), x_noisy.device)
 
         a = self.layer_norm_a(a)
 
         r_update = self.atom_att_dec.forward(a, q_skip, c_skip, p_skip, ref_struct)
-        debug_data = utils.move_to_device(torch.load('tests/test_lysozyme/debug_diff_mod_att_dec.pt', weights_only=False), x_noisy.device)
 
         d_skip = self.sigma_data**2 / (self.sigma_data**2+t_hat**2)
         d_scale = self.sigma_data * t_hat / torch.sqrt(self.sigma_data**2 + t_hat**2)

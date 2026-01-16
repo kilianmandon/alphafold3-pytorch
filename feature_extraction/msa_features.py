@@ -221,7 +221,7 @@ class CalculateMSAFeatures(Transform):
                 max_msa_sequences=max_msa_sequences,
                 use_paths_in_chain_info=True,
             ),
-            DeduplicateMSA(),
+            # DeduplicateMSA(),
             HotfixDuplicateRowIfSingleMSA(),
             EncodeMSA(),
             # PairAndMergePolymerMSAs(dense=True),

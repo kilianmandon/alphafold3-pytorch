@@ -2,6 +2,7 @@ import math
 import torch
 from torch import nn
 import torch.nn.functional as F
+import tensortrace as ttr
 
 class AdaptiveLayerNorm(nn.Module):
     def __init__(self, c_a, c_s):
@@ -100,9 +101,13 @@ class Transition(nn.Module):
 
     def forward(self, x):
         x = self.layer_norm(x)
+        # x = ttr.compare(x, 'transition/act_in')
         a = self.linear_a(x)
         b = self.linear_b(x)
+        # ttr.compare(torch.cat((a,b), dim=-1), 'transition/act_emb')
+        # ttr.compare(F.silu(a)*b, 'transition/act_swish')
         x = self.linear_out(F.silu(a) * b)
+        # ttr.compare(x, 'transition/act_out')
         return x
 
 

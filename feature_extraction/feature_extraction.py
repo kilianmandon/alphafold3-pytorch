@@ -77,7 +77,7 @@ def load_input(path):
         "chain_info": chain_info,
     }
 
-class DropSaccharideO1(Transform):
+class HotfixDropSaccharideO1(Transform):
     def forward(self, data):
         atom_array = data['atom_array']
         res_names = np.unique(atom_array.res_name)
@@ -87,6 +87,13 @@ class DropSaccharideO1(Transform):
 
         return data
 
+class HotfixFillRefSpaceUID(Transform):
+    def forward(self, data):
+        ref_struct = data['ref_struct']
+        ref_struct['ref_space_uid'][...] = ref_struct['ref_space_uid'][:, :1]
+        return data
+
+
 
 
 def custom_af3_pipeline(n_recycling_iterations, msa_shuffle_orders=None):
@@ -95,7 +102,7 @@ def custom_af3_pipeline(n_recycling_iterations, msa_shuffle_orders=None):
     #     for i in range(2)], axis=0)
     transforms = [
         RemoveHydrogens(),
-        DropSaccharideO1(),
+        HotfixDropSaccharideO1(),
         # RemoveTerminalOxygen(),
         AtomizeByCCDName(
             atomize_by_default=True,
@@ -103,6 +110,7 @@ def custom_af3_pipeline(n_recycling_iterations, msa_shuffle_orders=None):
         ),
         CalculateTokenFeatures(),
         CalculateRefStructFeatures(),
+        HotfixFillRefSpaceUID(),
         CalculateMSAFeatures(msa_shuffle_orders=msa_shuffle_orders, n_recycling_iterations=n_recycling_iterations),
         CalculateContactMatrix(),
         ConvertToTorch(['msa_features', 'ref_struct', 'token_features', 'contact_matrix'], )
