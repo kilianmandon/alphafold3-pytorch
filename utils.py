@@ -1,21 +1,21 @@
 import numpy as np
 import torch
 
-from atom_layout import LayoutConversion, AtomLayout
+import atom_layout
 
+Array = np.ndarray | torch.Tensor
 
-def pad_to_shape_np(data, padded_shape, value=0):
-    padded = np.full(padded_shape, fill_value=value, dtype=data.dtype, device=data.device)
+def pad_to_shape(data: Array , padded_shape, value=0):
+    if isinstance(data, np.ndarray):
+        padded = np.full(padded_shape, fill_value=value, dtype=data.dtype, device=data.device)
+    else:
+        padded = torch.full(padded_shape, fill_value=value, dtype=data.dtype, device=data.device)
+
     inds = tuple(slice(i) for i in data.shape)
     padded[inds] = data
+
     return padded
 
-
-def pad_to_shape(data, padded_shape, value=0):
-    padded = torch.full(padded_shape, fill_value=value, dtype=data.dtype, device=data.device)
-    inds = tuple(slice(i) for i in data.shape)
-    padded[inds] = data
-    return padded
 
 def crop_pad_to_shape(data, padded_shape, value=0):
     inds = tuple(slice(min(i, j)) for i, j in zip(data.shape, padded_shape))
@@ -44,30 +44,15 @@ def round_up_to(data, rounding_target, return_indices=False):
         return rounding_target[target_inds]
 
 
-def batched_gather(feat, gather_inds, batch_shape):
-    # feat has shape (**batch_shape, gather_dim, **feat_dims)
-    # gather_inds has shape (**batch_shape, **gather_shape)
-    # out has shape (**batch_shape, **gather_shape, **feat_dims)
-    feat_dims = feat.shape[len(batch_shape)+1:]
-    gather_shape = gather_inds.shape[len(batch_shape):]
-    out_shape = batch_shape + gather_shape + feat_dims
-    gather_inds = gather_inds.flatten(-len(gather_shape))
-    gather_inds_pre_bc_shape = gather_inds.shape + (1,) * len(feat_dims)
-    gather_inds_post_bc_shape = gather_inds.shape + feat_dims
-    gather_inds = gather_inds.reshape(gather_inds_pre_bc_shape).broadcast_to(gather_inds_post_bc_shape)
-
-    feat_gathered = torch.gather(feat, len(batch_shape), gather_inds)
-    return feat_gathered.reshape(out_shape)
-
-def masked_mean_np(feat, mask, axis, keepdims=False):
-    feat_sum = np.sum(feat * mask, axis=axis, keepdims=keepdims)
-    count = np.sum(mask, axis=axis, keepdims=keepdims)
-    return feat_sum / np.clip(count, a_min=1e-10, a_max=None)
-
-def masked_mean(feat, mask, dim, keepdim=False):
-    feat_sum = (feat*mask).sum(dim=dim, keepdim=keepdim)
-    count = mask.sum(dim=dim, keepdim=keepdim)
-    return feat_sum / torch.clip(count, min=1e-10)
+def masked_mean(feat: Array, mask: Array, axis, keepdims=False):
+    if isinstance(feat, np.ndarray):
+        feat_sum = np.sum(feat * mask, axis=axis, keepdims=keepdims)
+        count = np.sum(mask, axis=axis, keepdims=keepdims)
+        return feat_sum / np.clip(count, a_min=1e-10, a_max=None)
+    else:
+        feat_sum = (feat*mask).sum(dim=axis, keepdim=keepdims)
+        count = mask.sum(dim=axis, keepdim=keepdims)
+        return feat_sum / torch.clip(count, min=1e-10)
 
 
 
@@ -140,19 +125,9 @@ def quat_vector_mul(q, v):
 
     return v_out
 
-def move_to_device(obj, device=None, dtype=None):
-    """Recursively move all tensors in a nested structure to a specified device."""
-    if isinstance(obj, torch.Tensor):  
-        return obj.to(device=device, dtype=dtype)
-    elif isinstance(obj, dict):  
-        return {key: move_to_device(value, device, dtype) for key, value in obj.items()}  
-    elif isinstance(obj, list):  
-        return [move_to_device(item, device, dtype) for item in obj]  
-    elif isinstance(obj, tuple):  
-        return tuple(move_to_device(item, device) for item in obj)  
-    elif isinstance(obj, AtomLayout) or isinstance(obj, LayoutConversion):
-        for attr in vars(obj):
-            setattr(obj, attr, move_to_device(getattr(obj, attr), device, dtype))
-        return obj
+
+def unify_batch_dimension(x: torch.Tensor, batch_shape):
+    if len(batch_shape) == 0:
+        return x[None, ...]
     else:
-        return obj
+        return x.flatten(end_dim=len(batch_shape)-1)

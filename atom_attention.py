@@ -1,11 +1,30 @@
 import math
 import torch
 from torch import nn
+from feature_extraction.ref_struct_features import RefStructFeatures
+from sparse_utils import BlockSparseTensor
 import tensortrace as ttr
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 
 from common import AdaptiveLayerNorm, AdaptiveZeroInit, ConditionedTransitionBlock
 import utils
 
+def hotfix_mangle_layout(ref_space_uid, ref_struct: RefStructFeatures):
+    ref_space_uid = ref_struct.to_token_layout(ref_space_uid)
+    ref_space_uid[..., :, :] = ref_space_uid[..., :, :1]
+    ref_space_uid = torch.flatten(ref_space_uid, start_dim=-2)
+    return ref_space_uid
+
+def build_block_mask(sparse_mask, N_head=4):
+    batch_shape = sparse_mask.shape[:-2]
+    Q, V = sparse_mask.shape[-2:]
+    B = math.prod(list(batch_shape))
+
+    def builder(b, h, q_idx, kv_idx):
+        batch_idx = torch.unravel_index(b, batch_shape)
+        return sparse_mask[*batch_idx, q_idx, kv_idx]
+
+    return create_block_mask(builder, B, N_head, Q, V)
 
 
 class AtomAttentionPairBias(nn.Module):
@@ -23,38 +42,54 @@ class AtomAttentionPairBias(nn.Module):
         self.linear_b = nn.Linear(c_z, N_head, bias=False)
         self.linear_g = nn.Linear(c_in, c*N_head, bias=False)
 
+        if torch.cuda.is_available():
+            self.flex_attention = torch.compile(flex_attention)
+        else:
+            self.flex_attention = flex_attention
+
         self.ada_zero_init = AdaptiveZeroInit(c_in, c_in, c_in)
         self.c = c
         self.N_head = N_head
 
-    def forward(self, a_q, a_k, z, s_q, s_k):
+    def forward(self, single_act, pair_act, single_cond, block_mask):
+        batch_shape = single_act.shape[:-2]
         N_head = self.N_head
+        N_token = single_act.shape[-2]
         c = self.c
 
-        a_q = self.layer_norm_q(a_q, s_q)
-        a_k = self.layer_norm_k(a_k, s_k)
+        a_q = self.layer_norm_q(single_act, single_cond)
+        a_k = self.layer_norm_k(single_act, single_cond)
 
+        z = self.layer_norm_z(pair_act)
         q = self.linear_q(a_q).unflatten(-1, (N_head, c))
         k = self.linear_k(a_k).unflatten(-1, (N_head, c))
         v = self.linear_v(a_k).unflatten(-1, (N_head, c))
+        g = self.linear_g(a_q).unflatten(-1, (N_head, c))
 
-        b = self.linear_b(self.layer_norm_z(z))
-        b = torch.einsum('...qkn->...nqk', b)
+        bias = self.linear_b(z)
+        
 
-        g = torch.sigmoid(self.linear_g(a_q))
+        q = torch.einsum('...ihc->...hic', q)
+        k = torch.einsum('...jhc->...hjc', k)
+        v = torch.einsum('...jhc->...hjc', v)
 
-        # Values here get really large, might be numerically unstable? Calculated in fp32 in AF3
-        # Even changing the layout to qkn instead of nqk significantly increases deviation from AF3
-        q = q / math.sqrt(c)
-        att = torch.einsum('...qnc,...knc->...nqk', q, k) + b
+        q = utils.unify_batch_dimension(q, batch_shape)
+        k = utils.unify_batch_dimension(k, batch_shape)
+        v = utils.unify_batch_dimension(v, batch_shape)
 
-        att = torch.softmax(att, dim=-1)
+        def bias_score_mod(score, b, h, q_idx, kv_idx):
+            return score + bias[b, q_idx, kv_idx, h]
 
-        o = torch.einsum('...nqk,...knc->...qnc', att, v)
-        o = g * o.flatten(start_dim=-2)
+        q = q.contiguous(); k = k.contiguous(); v = v.contiguous()
+        o = self.flex_attention(q, k, v, score_mod=bias_score_mod, block_mask=block_mask)
+        o = o.reshape(batch_shape + (N_head, N_token, c))
+        o = torch.einsum('...hjc->...jhc', o)
+
+        o = torch.sigmoid(g) * o
+        o = o.flatten(-2)
 
         # According to the paper, there should be an additional linear layer before ada_zero_init
-        o = self.ada_zero_init(o, s_q)
+        o = self.ada_zero_init(o, single_cond)
 
         return o
 
@@ -70,15 +105,12 @@ class AtomTransformer(nn.Module):
         self.transition_blocks = nn.ModuleList(
             [ConditionedTransitionBlock(c_a=128, c_s=128, n=2) for _ in range(self.N_block)])
 
-    def forward(self, a_q, atom_layout, s_q, pair_cond):
-        s_k = atom_layout.queries_to_keys(s_q, n_feat_dims=1)
-
+    def forward(self, single_act, pair_act, single_cond, block_mask):
         for attn_block, transition_block in zip(self.attn_blocks, self.transition_blocks):
-            a_k = atom_layout.queries_to_keys(a_q, 1)
-            a_q += attn_block(a_q, a_k, pair_cond, s_q, s_k)
-            a_q += transition_block(a_q, s_q)
+            single_act += attn_block.forward(single_act, pair_act, single_cond, block_mask)
+            single_act += transition_block(single_act, single_cond)
 
-        return a_q
+        return single_act
 
 
 class AtomAttentionEncoder(nn.Module):
@@ -117,116 +149,96 @@ class AtomAttentionEncoder(nn.Module):
             self.trunk_linear_r = nn.Linear(3, c_atom, bias=False)
 
 
-    def forward(self, ref_struct, r=None, s_trunk=None, z=None):
-        atom_layout = ref_struct['atom_layout']
-        per_atom = self.per_atom_cond(ref_struct)
-        queries_single_cond = atom_layout.tokens_to_queries(per_atom, 1)
-        queries_act = queries_single_cond.clone()
-        queries_mask = atom_layout.tokens_to_queries.target_mask
+    def forward(self, ref_struct: RefStructFeatures, r=None, s_trunk=None, z=None):
+        ref_space_uid = ref_struct.ref_space_uid
+        ref_pos = ref_struct.positions
+        block_mask = ref_struct.block_mask
+        batch_shape = ref_space_uid.shape[:-2]
 
-        keys_mask = atom_layout.tokens_to_keys.target_mask
+        single_cond = self.per_atom_cond(ref_struct)
 
-        queries_ref_space_uid = atom_layout.tokens_to_queries(
-            ref_struct['ref_space_uid'], 0)
+        single_act = single_cond.clone()
 
-        # queries_single_cond = ttr.compare(queries_single_cond, 'queries_act_0_input')
+        wrong_ref_space_uid = hotfix_mangle_layout(ref_space_uid, ref_struct)
+        ref_space_left = BlockSparseTensor.from_broadcast(ref_space_uid[..., :, None], block_mask, batch_shape)
+        ref_space_right = BlockSparseTensor.from_broadcast(wrong_ref_space_uid[..., None, :], block_mask, batch_shape)
+        ref_pos_left = BlockSparseTensor.from_broadcast(ref_pos[..., :, None, :], block_mask, batch_shape)
+        ref_pos_right = BlockSparseTensor.from_broadcast(ref_pos[..., None, :, :], block_mask, batch_shape)
 
-        # Note: Correct indexing would look like this
-        # keys_ref_space_uid = atom_layout.tokens_to_keys(ref_struct['ref_space_uid'], 0)
-        # Thats problematic in some senses, for example, values that are masked in the 
-        # token space ref_space_uid are at unmasked positions in keys_ref_space_uid
-        # But we follow Deepminds implementation:
-        keys_ref_space_uid = atom_layout.queries_to_keys(
-            ref_struct['ref_space_uid'], 0)
+        offsets_valid = (ref_space_left == ref_space_right).to(dtype=torch.float32)
 
-        # ttr.compare(queries_ref_space_uid, 'q_ref_space_uid')
-        # ttr.compare(keys_ref_space_uid, 'k_ref_space_uid')
-        # ttr.compare(ref_struct['ref_space_uid'], 'ref_space_uid')
+        offsets = ref_pos_left - ref_pos_right
 
-        queries_ref_pos = atom_layout.tokens_to_queries(
-            ref_struct['ref_pos'], 1)
-        keys_ref_pos = atom_layout.tokens_to_keys(ref_struct['ref_pos'], 1)
-
-        offsets_valid = (queries_ref_space_uid.unsqueeze(-1) ==
-                         keys_ref_space_uid.unsqueeze(-2)).to(dtype=torch.float32)
-        offsets_valid = offsets_valid.unsqueeze(-1)
-        offsets = queries_ref_pos.unsqueeze(-2) - keys_ref_pos.unsqueeze(-3)
 
         pair_act = self.embed_pair_offsets(offsets) * offsets_valid
-        sq_dists = offsets.square().sum(dim=-1, keepdim=True)
+
+        sq_dists = torch.sum(offsets**2, dim=-1, keepdim=True)
 
         pair_act += self.embed_pair_distances(1/(1+sq_dists)) * offsets_valid
 
         if self.use_trunk:
-            s_trunk = atom_layout.pure_tokens_to_queries(s_trunk, 1)
-            z = atom_layout.pure_pair_to_qk(z, 1)
+            s_trunk = ref_struct.to_atom_layout(s_trunk, has_atom_dimension=False)
 
-            queries_single_cond += self.trunk_linear_s(
-                self.trunk_layer_norm_s(s_trunk))
+            batch_idx, p_idx, l_idx = BlockSparseTensor.block_mask_to_index(block_mask)
+            token_indices = utils.unify_batch_dimension(ref_struct.token_index, batch_shape)
+            i_idx = token_indices[batch_idx, p_idx]
+            j_idx = token_indices[batch_idx, l_idx]
+            z = z[batch_idx, i_idx, j_idx]
+
+            single_cond += self.trunk_linear_s(self.trunk_layer_norm_s(s_trunk))
             pair_act += self.trunk_linear_z(self.trunk_layer_norm_z(z))
 
             # Note: The paper uses the old, non-trunk-updated value
             # for queries_single_cond here
-            queries_act = queries_single_cond + self.trunk_linear_r(r)
+            single_act = single_cond + self.trunk_linear_r(r)
 
-        keys_single_cond = atom_layout.queries_to_keys(queries_single_cond, 1)
 
-        row_act = self.single_to_pair_row(torch.relu(queries_single_cond))
-        col_act = self.single_to_pair_col(torch.relu(keys_single_cond))
-        pair_act += row_act[:, :, None, :] + col_act[:, None, :, :]
-        # pair_act = ttr.compare(pair_act, 'pair_act_2_pair_dist')
+        row_act = self.single_to_pair_row(torch.relu(single_cond))
+        row_act = BlockSparseTensor.from_broadcast(row_act[..., :, None, :], block_mask, batch_shape)
+        col_act = self.single_to_pair_col(torch.relu(single_cond))
+        col_act = BlockSparseTensor.from_broadcast(col_act[..., None, :, :], block_mask, batch_shape)
 
-        # Debug block
-        # p1 = row_act[:, :, None, :] + col_act[:, None, :, :]
-        # p2 = p1 + self.embed_pair_offsets(offsets) * offsets_valid
-        # p3 = p2 + self.embed_pair_distances(1/(1+sq_dists)) * offsets_valid
-        # p4 = p3 + self.embed_pair_mask(offsets_valid)
-        # ttr.compare(offsets, 'offsets')
-        # ttr.compare(offsets_valid.squeeze(), 'offsets_valid')
-        # ttr.compare(p1, 'pair_act_0_from_single')
-        # ttr.compare(p2, 'pair_act_1_offsets')
-        # ttr.compare(p3, 'pair_act_2_pair_dist')
-        # ttr.compare(p4, 'pair_act_3_offsets_valid')
-        # End
+        pair_act += row_act + col_act
         pair_act += self.embed_pair_mask(offsets_valid)
         # pair_act = ttr.compare(pair_act, 'pair_act_3_offsets_valid')
 
         pair_act += self.pair_mlp(pair_act)
         # pair_act = ttr.compare(pair_act, 'pair_act_4_mlp')
 
-        queries_act = self.atom_transformer(
-            queries_act,
-            atom_layout,
-            queries_single_cond,
-            pair_act
+        single_act = self.atom_transformer(
+            single_act,
+            pair_act,
+            single_cond,
+            block_mask
         )
         # queries_act = ttr.compare(queries_act, 'queries_act_1_cross_att')
 
-        queries_act *= queries_mask[..., None]
+        # token_act = atom_layout.queries_to_tokens(single_act, 1)
 
-        token_act = atom_layout.queries_to_tokens(queries_act, 1)
+        token_act = ref_struct.to_token_layout(single_act)
         token_act = torch.relu(self.project_atom_features(token_act))
 
         
-        token_act = utils.masked_mean(token_act, ref_struct['ref_mask'][..., None], dim=-2)
+        # token_act has shape (*, N_atoms, c)
+        token_act = utils.masked_mean(token_act, ref_struct.token_layout_ref_mask[..., None], axis=-2)
 
-        skip = (queries_act, queries_single_cond, pair_act)
+        skip = (single_act, single_cond, pair_act)
 
         return token_act, skip
 
-    def per_atom_cond(self, flat_ref_struct):
-        keys = ['ref_pos', 'ref_mask', 'ref_element', 'ref_charge', 'ref_atom_name_chars']
+    def per_atom_cond(self, ref_struct: RefStructFeatures):
 
 
-        mask = flat_ref_struct['ref_mask'][..., None].to(torch.float32)
-        element = flat_ref_struct['ref_element'].long()
-        charge = flat_ref_struct['ref_charge'][..., None].to(torch.float32)
-        name_chars = flat_ref_struct['ref_atom_name_chars'].long()
+        mask = ref_struct.mask[..., None].to(torch.float32)
+        element = ref_struct.element.long()
+        charge = ref_struct.charge[..., None].to(torch.float32)
+        name_chars = ref_struct.atom_name_chars.long()
+
         elements_1h = nn.functional.one_hot(element, 128).to(torch.float32)
         atom_names_1h = nn.functional.one_hot(name_chars, 64).to(torch.float32)
         atom_names_1h = atom_names_1h.reshape(atom_names_1h.shape[:-2] + (-1,))
 
-        act = self.embed_ref_pos(flat_ref_struct['ref_pos'])
+        act = self.embed_ref_pos(ref_struct.positions)
         act += self.embed_ref_mask(mask)
         act += self.embed_ref_element(elements_1h)
         act += self.embed_ref_charge(torch.arcsinh(charge))
@@ -245,11 +257,10 @@ class AtomAttentionDecoder(nn.Module):
         self.layer_norm_q = nn.LayerNorm(c_q, bias=False)
         self.linear_out = nn.Linear(c_q, 3, bias=False)
 
-    def forward(self, a, q_skip, c_skip, p_skip, ref_struct):
-        atom_layout = ref_struct['atom_layout']
+    def forward(self, a, q_skip, c_skip, p_skip, ref_struct: RefStructFeatures):
         a = self.linear_a(a)
-        a_q = atom_layout.pure_tokens_to_queries(a, n_feat_dims=1)
+        a_q = ref_struct.to_atom_layout(a, has_atom_dimension = False)
         q = a_q + q_skip
-        q = self.atom_transformer(q, atom_layout, c_skip, p_skip)
+        q = self.atom_transformer(q, p_skip, c_skip, ref_struct.block_mask)
         r = self.linear_out(self.layer_norm_q(q))
         return r

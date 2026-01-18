@@ -1,9 +1,11 @@
 import torch
+from feature_extraction.feature_extraction import Batch
+from feature_extraction.token_features import TokenFeatures
 import tensortrace as ttr
 from torch import nn
 import torch.nn.functional as F
 
-from atom_attention import AtomAttentionEncoder
+from atom_attention_sparse import AtomAttentionEncoder
 
 def reorder_encoding(dim=-1, offset=0):
     token_enc_shift = {
@@ -40,13 +42,13 @@ class InputEmbedder(nn.Module):
         self.single_embedding = nn.Linear(tf_dim, c_s, bias=False)
         self.atom_cross_att = AtomAttentionEncoder(c_s, c_z)
 
-    def relative_encoding(self, batch, rmax=32, smax=2):
-        token_features = batch['token_features']
-        token_index = token_features['token_index']
-        residue_index = token_features['residue_index']
-        asym_id = token_features['asym_id']
-        entity_id = token_features['entity_id']
-        sym_id = token_features['sym_id']
+    def relative_encoding(self, batch: Batch, rmax=32, smax=2):
+        token_features = batch.token_features
+        token_index = token_features.token_index
+        residue_index = token_features.residue_index
+        asym_id = token_features.asym_id
+        entity_id = token_features.entity_id
+        sym_id = token_features.sym_id
 
         left_token_index, right_token_index = token_index[...,
                                                           None], token_index[..., None, :]
@@ -85,9 +87,9 @@ class InputEmbedder(nn.Module):
 
     def forward(self, batch):
         # Implements Line 1 to Line 5 from Algorithm 1
-        target_feat = batch['msa_features']['target_feat']
+        target_feat = batch.msa_features.target_feat
         with ttr.Chapter('input_embedding'):
-            token_act, _ = self.atom_cross_att(batch['ref_struct'])
+            token_act, _ = self.atom_cross_att(batch.ref_struct)
         ttr.compare(target_feat, 'input_embedding/target_feat', input_processing=[reorder_encoding(offset=32), reorder_encoding(offset=0)])
         ttr.compare(token_act, 'input_embedding/token_act')
         s_input = torch.cat((target_feat, token_act), dim=-1)
@@ -100,6 +102,6 @@ class InputEmbedder(nn.Module):
 
         rel_enc, rel_feat = self.relative_encoding(batch)
         z_init += rel_enc
-        z_init += self.bond_embedding(batch['contact_matrix'])
+        z_init += self.bond_embedding(batch.contact_matrix)
 
         return s_input, s_init, z_init, rel_feat

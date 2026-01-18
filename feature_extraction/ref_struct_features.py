@@ -1,6 +1,9 @@
-import time
+from dataclasses import dataclass, fields
+from typing import Optional
 
 import numpy as np
+from torch.nn.attention.flex_attention import BlockMask
+from torch.nn import functional as F
 import rdkit
 import torch
 from atomworks.io.tools.rdkit import atom_array_from_rdkit, ccd_code_to_rdkit
@@ -13,7 +16,102 @@ from atomworks.ml.utils.token import get_token_count, get_token_starts
 from biotite.structure import AtomArray
 
 import utils
-from atom_layout import AtomLayout
+
+
+Array = np.ndarray | torch.Tensor
+
+@dataclass
+class RefStructFeatures:
+    element: Array
+    charge: Array
+    atom_name_chars: Array
+    positions: Array
+    mask: Array
+    ref_space_uid: Array
+    token_index: Array
+    block_mask: Optional[BlockMask] = None
+
+    def map_arrays(self, fn):
+        field_dict = {f.name: fn(getattr(self, f.name)) for f in fields(self)}
+        return RefStructFeatures(**field_dict)
+
+    @property
+    def unpadded_atom_count(self):
+        if isinstance(self.mask, np.ndarray):
+            return np.sum(self.mask, axis=-1)            
+        else:
+            return torch.sum(self.mask, dim=-1)
+
+    @property
+    def atom_count(self):
+        return self.mask.shape[-1]
+
+    @property
+    def token_layout_ref_mask(self):
+        token_count = self.atom_count // 24
+
+        token_atom_counts = F.one_hot(torch.tensor(self.token_index[self.mask]), num_classes=token_count).sum(dim=-2)
+        ref_mask = torch.arange(24) < token_atom_counts[..., None]
+        ref_mask = utils.pad_to_shape(ref_mask, (token_count, 24))
+
+        if isinstance(self.mask, np.ndarray):
+            return ref_mask.numpy()
+        else:
+            return ref_mask
+
+
+    def to_token_layout(self, feature):
+        batch_shape = self.element.shape[:-1]
+        token_count = self.atom_count // 24
+        token_layout_ref_mask = self.token_layout_ref_mask
+        out_shape = batch_shape + (token_count, 24) + feature.shape[len(batch_shape)+1:]
+
+        if isinstance(self.mask, np.ndarray):
+            feature = np.array(feature)
+            out = np.zeros(out_shape, dtype=feature.dtype)
+        else:
+            feature = torch.tensor(feature)
+            out = torch.zeros(out_shape, dtype=feature.dtype, device=feature.device)
+        out[token_layout_ref_mask] = feature[self.mask]
+
+        return out
+
+
+    def patch_atom_dimension(self, feature):
+        batch_shape = self.element.shape[:-1]
+        token_count = self.atom_count // 24
+        unsqueezed_shape = batch_shape + (token_count, 1) + feature.shape[len(batch_shape) + 1]
+        broadcasted_shape = batch_shape + (token_count, 24) + feature.shape[len(batch_shape) + 1]
+
+        feature = feature.reshape(unsqueezed_shape)
+        if isinstance(self.mask, np.ndarray):
+            feature = np.array(feature)
+            return np.broadcast_to(feature, broadcasted_shape)
+        else:
+            feature = torch.tensor(feature)
+            return feature.expand(*broadcasted_shape)
+
+    def to_atom_layout(self, feature, has_atom_dimension=True):
+        batch_shape = self.element.shape[:-1]
+        if not has_atom_dimension:
+            feature = self.patch_atom_dimension(feature)
+
+        out_shape = batch_shape + (self.atom_count,) + feature.shape[len(batch_shape)+2:]
+
+        if isinstance(self.mask, np.ndarray):
+            feature = np.array(feature)
+            if not has_atom_dimension:
+                feature = feature[len()]
+            out = np.zeros(out_shape, dtype=feature.dtype)
+        else:
+            feature = torch.tensor(feature)
+            out = torch.zeros(out_shape, dtype=feature.dtype, device=feature.device)
+
+        out[self.mask] = feature[self.token_layout_ref_mask]
+        return out
+
+
+
 
 
 class CalculateRefStructFeatures(Transform):
@@ -81,44 +179,36 @@ class CalculateRefStructFeatures(Transform):
     def forward(self, data: dict):
         atom_array: AtomArray = data['atom_array']
 
-        residue_borders = get_residue_starts(atom_array, add_exclusive_stop=True)
-        residue_starts, residue_ends = residue_borders[:-1], residue_borders[1:]
+        residue_starts = get_residue_starts(atom_array)
         ref_space_uid = np.arange(len(residue_starts))
         _, closest_start = utils.round_down_to(np.arange(len(atom_array)), residue_starts, return_indices=True)
         ref_space_uid = ref_space_uid[closest_start]
 
+        token_starts = get_token_starts(atom_array)
+        _, closest_start = utils.round_down_to(np.arange(len(atom_array)), token_starts, return_indices=True)
+        token_index = np.arange(len(token_starts))
+        token_index = token_index[closest_start]
+
 
 
         ref_struct = {
-            'ref_element': atom_array.atomic_number,
-            'ref_charge': atom_array.charge,
-            'ref_atom_name_chars': self.prep_atom_chars(atom_array.atom_name),
-            # 'atom_names': atom_array.atom_name,
-            'ref_pos': self.calculate_ref_positions(atom_array).astype(np.float32),
-            'ref_mask': np.ones_like(atom_array.atomic_number),
+            'element': atom_array.atomic_number,
+            'charge': atom_array.charge,
+            'atom_name_chars': self.prep_atom_chars(atom_array.atom_name),
+            'positions': self.calculate_ref_positions(atom_array).astype(np.float32),
+            'mask': np.ones_like(atom_array.atomic_number).astype(bool),
             'ref_space_uid': ref_space_uid,
+            'token_index': token_index,
         }
 
-        padded_token_count = data['token_features']['restype'].shape[0]
+        padded_token_count = data['token_features'].restype.shape[0]
         padded_atom_count = padded_token_count * 24
-        atom_layout = AtomLayout.from_atom_array(atom_array, padded_token_count)
-
-        N_blocks = padded_token_count * 24 // 32
 
 
         for k, v in ref_struct.items():
             padded_shape = (padded_atom_count,) + v.shape[1:]
-            v = utils.pad_to_shape_np(v, padded_shape)
+            ref_struct[k] = utils.pad_to_shape(v, padded_shape)
 
-            n_feat_dims = len(v.shape) - 1
-            v_new_shape = (N_blocks, 32) + v.shape[1:]
-            v = atom_layout.queries_to_tokens(torch.tensor(v).reshape(v_new_shape), n_feat_dims=n_feat_dims).numpy()
-
-            ref_struct[k] = v
-
-
-        ref_struct['atom_layout'] = atom_layout
-
-        data['ref_struct'] = ref_struct
+        data['ref_struct'] = RefStructFeatures(**ref_struct)
 
         return data

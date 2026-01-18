@@ -368,7 +368,7 @@ class TensorTrace:
 
 def _apply_processing(entries: dict[str, Any], processing: dict[str, Any], apply_to_mask=False):
     for k,v in entries.items():
-        for proc in processing.get(k, []):
+        for proc in sum([v for k_proc,v  in processing.items() if k.startswith(k_proc)], []):
             if isinstance(v, tuple):
                 if apply_to_mask and v[1] is not None:
                     v = proc(v[0]), proc(v[1])
@@ -429,7 +429,7 @@ def _unify_processing_format(procs, name):
         if isinstance(procs, dict):
             procs = _collapse_nested_dict(procs)
         else:
-            procs = { name: procs }
+            procs = { '': procs }
         
         procs = {
             name: process if isinstance(process, list) else [process] 

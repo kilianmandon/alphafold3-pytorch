@@ -5,6 +5,7 @@ import tqdm
 
 from atom_attention import AtomAttentionDecoder, AtomAttentionEncoder
 from common import AttentionPairBias, ConditionedTransitionBlock, Transition
+from feature_extraction.ref_struct_features import RefStructFeatures
 import utils
 
 
@@ -25,7 +26,6 @@ class DiffusionModule(nn.Module):
     def forward(self, x_noisy, t_hat, s_inputs, s_trunk, z_trunk, rel_enc, ref_struct, mask):
         # x_noisy has shape (**batch_shape, N_blocks, 32, 3)
         # t_hat has shape (**batch_shape, )
-        atom_layout = ref_struct['atom_layout']
 
         s, z = self.diffusion_conditioning(t_hat, s_inputs, s_trunk, z_trunk, rel_enc)
         r=x_noisy / torch.sqrt(t_hat**2+self.sigma_data**2)[..., None, None, None]
@@ -35,7 +35,7 @@ class DiffusionModule(nn.Module):
 
 
         a += self.linear_s(self.layer_norm_s(s))
-        a = self.diffusion_transformer(a, s, z, mask, atom_layout)
+        a = self.diffusion_transformer(a, s, z, mask)
 
         a = self.layer_norm_a(a)
 
@@ -122,7 +122,7 @@ class DiffusionTransformer(nn.Module):
         self.N_block = N_block
 
 
-    def forward(self, a, s, z, mask, atom_layout):
+    def forward(self, a, s, z, mask):
         for att_pair_block, cond_trans_block in zip(self.att_pair_bias, self.cond_trans):
             # b = att_pair_block(a, z, mask, s=s)
             # a = b + cond_trans_block(a, s)
@@ -146,15 +146,13 @@ class DiffusionSampler(nn.Module):
     def noise_schedule(self, t, sigma_data=16, smin=0.0004, smax=160.0, p=7):
         return sigma_data * (smax ** (1/p) + t * (smin**(1/p) - smax**(1/p))) ** p
 
-    def forward(self, diffusion_module, s_inputs, s_trunk, z_trunk, rel_enc, ref_struct, mask, noise_data=None):
+    def forward(self, diffusion_module, s_inputs, s_trunk, z_trunk, rel_enc, ref_struct: RefStructFeatures, mask, noise_data=None):
         # q2k_mask has shape (**batch_shape, N_block, 32,)
-        t2q_mask = ref_struct['atom_layout'].tokens_to_queries.target_mask
-        batch_shape = t2q_mask.shape[:-2]
-        N_block = t2q_mask.shape[-2]
-        device = s_inputs.device
+        batch_shape = s_trunk.shape[:-2]
+        device = s_trunk.device
         
         noise_levels = self.noise_schedule(torch.linspace(0, 1, self.noise_steps+1, device=device))
-        x_shape = batch_shape + (N_block, 32, 3)
+        x_shape = batch_shape + (ref_struct.atom_count, 3)
 
         if noise_data is not None:
             x = noise_levels[0] * noise_data['init_pos'].to(dtype=torch.float32)
@@ -169,7 +167,7 @@ class DiffusionSampler(nn.Module):
             else:
                 rand_rot = rand_trans = None
 
-            x = self.center_random_aug(x, t2q_mask, ref_struct, rand_rot=rand_rot, rand_trans=rand_trans)
+            x = self.center_random_aug(x, ref_struct, rand_rot=rand_rot, rand_trans=rand_trans)
 
             gamma = self.gamma_0 if c > self.gamma_min else 0
             t_hat = c_prev * (gamma + 1)
@@ -181,14 +179,7 @@ class DiffusionSampler(nn.Module):
 
             x_noisy = x+noise
             x_denoised = diffusion_module.forward(x_noisy, t_hat, s_inputs, s_trunk, z_trunk, rel_enc, ref_struct, mask)
-            # debug_noisy = ref_struct['atom_layout'].tokens_to_queries(
-            #     torch.load(f'tests/test_lysozyme/positions_noisy_{i}.pt', weights_only=False).to(x_noisy.device),
-            #     n_feat_dims=1
-            # )
-            # debug_denoised = ref_struct['atom_layout'].tokens_to_queries(
-            #     torch.load(f'tests/test_lysozyme/positions_denoised_{i}.pt', weights_only=False).to(x_noisy.device),
-            #     n_feat_dims=1
-            # )
+
 
             delta = (x_noisy-x_denoised)/t_hat
             dt = c - t_hat
@@ -201,13 +192,12 @@ class CenterRandomAugmentation(nn.Module):
         super().__init__()
         self.s_trans=s_trans
 
-    def forward(self, x, mask, ref_struct, rand_rot=None, rand_trans=None):
-        # x has shape (**batch_dims, N_blocks, 32, 3)
+    def forward(self, x, ref_struct: RefStructFeatures, rand_rot=None, rand_trans=None):
+        # x has shape (**batch_dims, N_atoms, 3)
         device = x.device
-        atom_layout = ref_struct['atom_layout']
-        batch_shape = x.shape[:-3]
+        batch_shape = x.shape[:-2]
 
-        x = x - utils.masked_mean(x, mask[..., None], dim=(-2,-3), keepdim=True)
+        x = x - utils.masked_mean(x, ref_struct.mask[..., None], dim=(-2), keepdim=True)
 
         if rand_rot is None:
             rand_quats = torch.randn(batch_shape+(1,1,4), device=device)

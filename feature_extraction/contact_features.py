@@ -14,8 +14,8 @@ class CalculateContactMatrix(Transform):
         _, atom1_token_indices = utils.round_down_to(atom1_idxs, token_starts, return_indices=True)
         _, atom2_token_indices = utils.round_down_to(atom2_idxs, token_starts, return_indices=True)
 
-        padded_token_count = data['token_features']['restype'].shape[0]
-        is_atomized = utils.pad_to_shape_np(atom_array[token_starts].atomize, (padded_token_count,))
+        padded_token_count = data['token_features'].token_count
+        is_atomized = utils.pad_to_shape(atom_array[token_starts].atomize, (padded_token_count,))
 
         atom1_token_indices, atom2_token_indices = np.minimum(atom1_token_indices, atom2_token_indices), np.maximum(atom1_token_indices, atom2_token_indices)
         bond_matrix = np.zeros((padded_token_count, padded_token_count))

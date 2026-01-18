@@ -1,8 +1,11 @@
+from dataclasses import dataclass, fields
 import numpy as np
 from atomworks.constants import UNKNOWN_AA, STANDARD_RNA, UNKNOWN_RNA, STANDARD_DNA, UNKNOWN_DNA, STANDARD_AA
 from atomworks.ml.transforms.base import Transform
 from atomworks.ml.utils.token import get_token_starts
+import torch
 
+from feature_extraction.msa_features import MSAFeatures
 from residue_constants import AF3_TOKENS_MAP
 import utils
 
@@ -14,6 +17,31 @@ def round_to_bucket(v):
 
 def encode_restype(restype):
     return np.vectorize(lambda x: AF3_TOKENS_MAP.get(x, AF3_TOKENS_MAP[UNKNOWN_AA]))(restype)
+
+Array = np.ndarray | torch.Tensor
+
+@dataclass
+class TokenFeatures:
+    residue_index: Array
+    token_index: Array
+    asym_id: Array
+    entity_id: Array
+    sym_id: Array
+    mask: Array
+    restype: Array
+    is_rna: Array
+    is_dna: Array
+    is_protein: Array
+    is_ligand: Array
+
+    def map_arrays(self, fn):
+        field_dict = {f.name: fn(getattr(self, f.name)) for f in fields(self)}
+        return TokenFeatures(**field_dict)
+
+    @property
+    def token_count(self):
+        return self.residue_index.shape[-1]
+    
 
 
 class CalculateTokenFeatures(Transform):
@@ -51,7 +79,7 @@ class CalculateTokenFeatures(Transform):
             'asym_id': asym_id + 1,
             'entity_id': entity_id + 1,
             'sym_id': sym_id + 1,
-            'single_mask': np.ones(len(token_array), dtype=np.float32),
+            'mask': np.ones(len(token_array), dtype=bool),
             'restype': restype,
 
             'is_rna': is_rna,
@@ -62,9 +90,9 @@ class CalculateTokenFeatures(Transform):
 
         padded_token_count = round_to_bucket(len(token_array))
         for k, v in token_features.items():
-            token_features[k] = utils.pad_to_shape_np(v, (padded_token_count,))
+            token_features[k] = utils.pad_to_shape(v, (padded_token_count,))
 
-        data['token_features'] = token_features
+        data['token_features'] = TokenFeatures(**token_features)
 
         return data
 

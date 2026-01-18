@@ -1,3 +1,4 @@
+from dataclasses import dataclass, fields
 import numpy as np
 import torch
 from atomworks.constants import UNKNOWN_AA
@@ -12,6 +13,20 @@ import tensortrace as ttr
 from torch.nn import functional as F
 import utils
 from residue_constants import AF3_TOKENS_MAP, _PROTEIN_TO_ID
+
+Array = np.ndarray | torch.Tensor
+
+@dataclass
+class MSAFeatures:
+    msa_feat: Array
+    msa_mask: Array
+    target_feat: Array
+
+    def map_arrays(self, fn):
+        field_dict = {f.name: fn(getattr(self, f.name)) for f in fields(self)}
+        return MSAFeatures(**field_dict)
+
+
 
 class HotfixDuplicateRowIfSingleMSA(Transform):
     def __init__(self):
@@ -32,8 +47,8 @@ class HotfixDuplicateRowIfSingleMSA(Transform):
 
 class HotfixEncodeRNAAsProtein(Transform):
     def forward(self, data):
-        is_rna = data['token_features']['is_rna']
-        is_dna = data['token_features']['is_dna']
+        is_rna = data['token_features'].is_rna
+        is_dna = data['token_features'].is_dna
         is_nucleic = is_rna | is_dna
 
         if np.all(~is_nucleic):
@@ -68,7 +83,7 @@ class HotfixEncodeRNAAsProtein(Transform):
 
 class HotfixAF3LigandAsGap(Transform):
     def forward(self, data):
-        ligand_inds = np.nonzero(data['token_features']['is_ligand'])[0]
+        ligand_inds = np.nonzero(data['token_features'].is_ligand)[0]
         data['msa_features']['msa'][0, ligand_inds] = _PROTEIN_TO_ID['-']
         return data
 
@@ -112,7 +127,8 @@ class ConcatMSAs(Transform):
 
         max_msa_size = max(msa_data['msa'].shape[0] for msa_data in polymer_msas.values())
         token_count = get_token_count(atom_array)
-        padded_token_count = data['token_features']['restype'].shape[0]
+        
+        padded_token_count = data['token_features'].token_count
 
         full_msa = np.zeros((self.max_msa_sequences, padded_token_count), dtype=np.int64)
         deletion_count = np.zeros((self.max_msa_sequences, padded_token_count), dtype=np.float32)
@@ -122,7 +138,7 @@ class ConcatMSAs(Transform):
         full_msa[:max_msa_size, :token_count] = AF3_TOKENS_MAP['<G>']
         full_msa_mask[:max_msa_size, :token_count] = 1
 
-        full_msa[0] = data['token_features']['restype']
+        full_msa[0] = data['token_features'].restype
         full_msa_mask[0, :token_count] = 1
         individual_msa_mask[0, :token_count] = 1
 
@@ -165,12 +181,12 @@ class EncodeMSAFeatures(Transform):
         msa = data['msa_features']['msa']
         full_msa_mask = data['msa_features']['full_msa_mask']
         individual_msa_mask = data['msa_features']['individual_msa_mask']
-        restype = data['token_features']['restype']
+        restype = data['token_features'].restype
 
-        deletion_mean = utils.masked_mean_np(deletion_count, individual_msa_mask, axis=0)
+        deletion_mean = utils.masked_mean(deletion_count, individual_msa_mask, axis=0)
         deletion_value = (2 / np.pi) * np.arctan(deletion_count / 3)
         msa_one_hot = F.one_hot(torch.tensor(msa), num_classes=32).numpy()
-        profile = utils.masked_mean_np(msa_one_hot, individual_msa_mask[..., None], axis=0)
+        profile = utils.masked_mean(msa_one_hot, individual_msa_mask[..., None], axis=0)
 
         deletion_value = deletion_value[..., None]
         has_deletion = np.clip(deletion_count, a_min=0, a_max=1, dtype=np.float32)[..., None]
@@ -179,10 +195,16 @@ class EncodeMSAFeatures(Transform):
         msa_feat, msa_mask = self.sample_msa_features(full_msa_feat, full_msa_mask, self.msa_shuffle_orders)
         target_feat = self.calculate_target_feat(restype, profile, deletion_mean)
 
-        data['msa_features']['msa_feat'] = msa_feat.astype(np.float32)
-        data['msa_features']['msa_mask'] = msa_mask.astype(np.float32)
-        data['msa_features']['target_feat'] = target_feat.astype(np.float32)
-        data['msa_features']['profile'] = profile.astype(np.float32)
+        # data['msa_features']['msa_feat'] = msa_feat.astype(np.float32)
+        # data['msa_features']['msa_mask'] = msa_mask.astype(np.float32)
+        # data['msa_features']['target_feat'] = target_feat.astype(np.float32)
+        # data['msa_features']['profile'] = profile.astype(np.float32)
+
+        data['msa_features'] = MSAFeatures(
+            msa_feat.astype(np.float32),
+            msa_mask.astype(np.float32),
+            target_feat.astype(np.float32),
+        )
 
         return data
 

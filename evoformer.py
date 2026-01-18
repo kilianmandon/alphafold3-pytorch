@@ -1,4 +1,7 @@
 import copy
+from feature_extraction.feature_extraction import Batch
+from feature_extraction.msa_features import MSAFeatures
+from feature_extraction.token_features import TokenFeatures
 import tensortrace as ttr
 import math
 import torch
@@ -29,17 +32,17 @@ class Evoformer(nn.Module):
         self.c_s = c_s
         self.c_z = c_z
 
-    def forward(self, batch):
+    def forward(self, batch: Batch):
         c_s = self.c_s
         c_z = self.c_z
 
-        msa_features = batch['msa_features']
-        token_features = batch['token_features']
+        msa_features = batch.msa_features
+        token_features = batch.token_features
 
-        batch_shape = msa_features['target_feat'].shape[:-2]
-        N_token = msa_features['target_feat'].shape[-2]
-        single_mask = token_features['single_mask']
-        device = msa_features['target_feat'].device
+        batch_shape = msa_features.target_feat.shape[:-2]
+        N_token = msa_features.target_feat.shape[-2]
+        single_mask = token_features.mask
+        device = msa_features.target_feat.device
 
         s_input, s_init, z_init, rel_enc = self.input_embedder(batch)
 
@@ -49,8 +52,8 @@ class Evoformer(nn.Module):
 
             for i in tqdm.tqdm(range(self.N_cycle)):
                 sub_batch = copy.deepcopy(batch)
-                sub_batch['msa_features']['msa_feat'] = sub_batch['msa_features']['msa_feat'][..., i]
-                sub_batch['msa_features']['msa_mask'] = sub_batch['msa_features']['msa_mask'][..., i]
+                sub_batch.msa_features.msa_feat = sub_batch.msa_features.msa_feat[..., i]
+                sub_batch.msa_features.msa_mask = sub_batch.msa_features.msa_mask[..., i]
 
                 z = z_init + self.prev_z_embedding(self.layer_norm_prev_z(prev_z))
                 # z = ttr.compare(z, 'z_3_bonds_emb')
@@ -83,13 +86,13 @@ class TemplateEmbedder(nn.Module):
             [PairStack(c, N_intermediate=2) for _ in range(N_blocks)])
         self.c = c
 
-    def forward(self, batch, z):
+    def forward(self, batch: Batch, z):
         # TODO: Implement actual templates
-        target_feat = batch['msa_features']['target_feat']
+        target_feat = batch.msa_features.target_feat
         batch_shape = target_feat.shape[:-2]
         N_token = target_feat.shape[-2]
         N_templates = 4
-        single_mask = batch['token_features']['single_mask']
+        single_mask = batch.token_features.mask
         device = target_feat.device
 
         dummy_a = torch.zeros(batch_shape+(N_token, N_token, N_templates, 106), device=device, dtype=torch.float32)
@@ -156,7 +159,7 @@ class MSAPairWeightedAveraging(nn.Module):
         b = self.linear_b(self.layer_norm_z(z))
         g = torch.sigmoid(self.linear_g(m))
 
-        b += -1e9 * (1-single_mask[..., None, :, None])
+        b += -1e9 * ~single_mask[..., None, :, None]
 
         w = torch.softmax(b, dim=-2)
         o = torch.einsum('...ijh,...sjhc->...sihc', w, v)
@@ -235,7 +238,7 @@ class TriangleAttention(nn.Module):
 
         if self.starting_node:
             bias = bias[..., None, :, :, :]
-            bias += -1e9 * (1-single_mask[..., None, None, :, None])
+            bias += -1e9 * ~single_mask[..., None, None, :, None]
             q = torch.einsum('...ijhc->...ihjc', q)
             k = torch.einsum('...ikhc->...ihkc', k)
             v = torch.einsum('...ikhc->...ihkc', v)
@@ -245,7 +248,7 @@ class TriangleAttention(nn.Module):
             # I'm pretty sure this would be the correct variant for indexing
             # bias = bias[..., None, :, :].transpose(-2, -4)
             bias = bias[..., None, :, :, :].transpose(-3, -4)
-            bias += -1e9 * (1-single_mask[..., None, None, :, None])
+            bias += -1e9 * ~single_mask[..., None, None, :, None]
             # Layout conversion
             q = torch.einsum('...ijhc->...jhic', q)
             k = torch.einsum('...kjhc->...jhkc', k)
@@ -365,10 +368,10 @@ class MSAModule(nn.Module):
         self.blocks = nn.ModuleList(
             [MSAModuleBlock(c_m, c_z) for _ in range(N_block)])
 
-    def forward(self, batch, s, z):
-        msa_feat = batch['msa_features']['msa_feat']
-        msa_mask = batch['msa_features']['msa_mask']
-        single_mask = batch['token_features']['single_mask']
+    def forward(self, batch: Batch, s, z):
+        msa_feat = batch.msa_features.msa_feat
+        msa_mask = batch.msa_features.msa_mask
+        single_mask = batch.token_features.mask
         ttr.compare(msa_feat, 'msa_feat')
         m = self.linear_m(msa_feat)
         ttr.compare(m, 'msa_activations')

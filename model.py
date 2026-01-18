@@ -3,6 +3,7 @@ from torch import nn
 import torch
 from evoformer import Evoformer
 from diffusion import DiffusionModule, DiffusionSampler
+from feature_extraction.feature_extraction import Batch
 import utils
 import tensortrace as ttr
 
@@ -13,9 +14,9 @@ class Model(nn.Module):
         self.diffusion_module = DiffusionModule()
         self.diffusion_sampler = DiffusionSampler(noise_steps=noise_steps)
 
-    def forward(self, batch):
-        ref_struct = batch['ref_struct']
-        single_mask = batch['token_features']['single_mask']
+    def forward(self, batch: Batch):
+        ref_struct = batch.ref_struct
+        single_mask = batch.token_features.mask
 
         with ttr.Chapter('evoformer'):
             s_input, s_trunk, z_trunk, rel_enc = self.evoformer(batch)
@@ -25,9 +26,6 @@ class Model(nn.Module):
                                 s_input, s_trunk, z_trunk, rel_enc, 
                                 ref_struct, single_mask)
 
-        atom_layout = ref_struct['atom_layout']
-        token_mask = ref_struct['ref_mask']
-        x_out = atom_layout.queries_to_tokens(x_flat, n_feat_dims=1)
 
-        return x_out, token_mask
+        return x_flat
 

@@ -79,7 +79,7 @@ class AttentionPairBias(nn.Module):
 
         q = q / math.sqrt(c)
         att = torch.einsum('...ihc,...jhc->...ijh', q, k) + b
-        att += -1e9 * (1-mask[..., None, :, None])
+        att += -1e9 * ~mask[..., None, :, None]
         att = torch.softmax(att, dim=-2)
 
         o = torch.einsum('...ijh,...jhc->...ihc', att, v)

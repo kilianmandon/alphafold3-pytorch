@@ -1,5 +1,8 @@
+from dataclasses import dataclass, fields
 import json
+from typing import Mapping, Sequence
 
+from atomworks.ml.conditions import AtomArray
 import numpy as np
 import torch
 from atomworks.constants import STANDARD_AA, STANDARD_RNA, STANDARD_DNA
@@ -8,14 +11,44 @@ from atomworks.io.parser import parse_atom_array
 from atomworks.io.tools.inference import components_to_atom_array
 from atomworks.io.utils import ccd
 from atomworks.ml.transforms.atomize import AtomizeByCCDName
-from atomworks.ml.transforms.base import Compose, Transform, ConvertToTorch
+from atomworks.ml.transforms.base import Compose, Transform
 from atomworks.ml.transforms.filters import RemoveHydrogens, RemoveTerminalOxygen
 
+from atom_layout import AtomLayout
 import utils
 from feature_extraction.contact_features import CalculateContactMatrix
-from feature_extraction.msa_features import CalculateMSAFeatures
-from feature_extraction.ref_struct_features import CalculateRefStructFeatures
-from feature_extraction.token_features import CalculateTokenFeatures
+from feature_extraction.msa_features import CalculateMSAFeatures, MSAFeatures
+from feature_extraction.ref_struct_features import CalculateRefStructFeatures, RefStructFeatures
+from feature_extraction.token_features import CalculateTokenFeatures, TokenFeatures
+
+            
+Array = np.ndarray | torch.Tensor
+
+def tree_map(fn, x):
+    if isinstance(x, (torch.Tensor, np.ndarray)):
+        return fn(x)
+
+    if hasattr(x, "map_arrays"):
+        return x.map_arrays(lambda y: tree_map(fn, y))
+
+    if isinstance(x, dict):
+        return type(x)({k: tree_map(fn, v) for k, v in x.items()})
+
+    if isinstance(x, (tuple, list)):
+        return type(x)(tree_map(fn, v) for v in x)
+
+    return x
+
+@dataclass
+class Batch:
+    token_features: TokenFeatures
+    msa_features: MSAFeatures
+    ref_struct: RefStructFeatures
+    contact_matrix: Array
+
+    def map_arrays(self, fn):
+        field_dict = {f.name: fn(getattr(self, f.name)) for f in fields(self)}
+        return Batch(**field_dict)
 
 
 
@@ -90,7 +123,9 @@ class HotfixDropSaccharideO1(Transform):
 class HotfixFillRefSpaceUID(Transform):
     def forward(self, data):
         ref_struct = data['ref_struct']
-        ref_struct['ref_space_uid'][...] = ref_struct['ref_space_uid'][:, :1]
+        token_layout = ref_struct.to_token_layout(ref_struct.ref_space_uid)
+        token_layout[...] = token_layout[:, :1]
+        ref_struct.ref_space_uid = ref_struct.to_atom_layout(token_layout)
         return data
 
 
@@ -110,10 +145,10 @@ def custom_af3_pipeline(n_recycling_iterations, msa_shuffle_orders=None):
         ),
         CalculateTokenFeatures(),
         CalculateRefStructFeatures(),
-        HotfixFillRefSpaceUID(),
+        # HotfixFillRefSpaceUID(),
         CalculateMSAFeatures(msa_shuffle_orders=msa_shuffle_orders, n_recycling_iterations=n_recycling_iterations),
         CalculateContactMatrix(),
-        ConvertToTorch(['msa_features', 'ref_struct', 'token_features', 'contact_matrix'], )
+        # ExpandBatchDimension(),
     ]
 
     return Compose(transforms)
