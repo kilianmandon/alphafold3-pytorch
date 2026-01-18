@@ -5,7 +5,7 @@ import tensortrace as ttr
 from torch import nn
 import torch.nn.functional as F
 
-from atom_attention_sparse import AtomAttentionEncoder
+from atom_attention import AtomAttentionEncoder
 
 def reorder_encoding(dim=-1, offset=0):
     token_enc_shift = {
@@ -88,17 +88,13 @@ class InputEmbedder(nn.Module):
     def forward(self, batch):
         # Implements Line 1 to Line 5 from Algorithm 1
         target_feat = batch.msa_features.target_feat
-        with ttr.Chapter('input_embedding'):
-            token_act, _ = self.atom_cross_att(batch.ref_struct)
-        ttr.compare(target_feat, 'input_embedding/target_feat', input_processing=[reorder_encoding(offset=32), reorder_encoding(offset=0)])
-        ttr.compare(token_act, 'input_embedding/token_act')
+        token_act, _ = self.atom_cross_att(batch.ref_struct)
         s_input = torch.cat((target_feat, token_act), dim=-1)
 
         s_init = self.single_embedding(s_input)
         a = self.left_single(s_input)
         b = self.right_single(s_input)
         z_init = a[..., None, :] + b[..., None, :, :]
-        ttr.compare(z_init, 'evoformer/z_0_init')
 
         rel_enc, rel_feat = self.relative_encoding(batch)
         z_init += rel_enc

@@ -1,12 +1,11 @@
 import math
 import time
 import torch
-from atom_layout import AtomLayout
 from feature_extraction.feature_extraction import Batch, custom_af3_pipeline, load_input, tree_map
 import utils
 from model import Model
 import tensortrace as ttr
-from torch.nn.attention.flex_attention import BlockMask
+from torch.nn.attention.flex_attention import create_block_mask
 
 
 def reorder_encoding(dim=-1, offset=0):
@@ -57,7 +56,6 @@ def main():
 
     print(f'Featurization took {time.time()-t1:.1f} seconds.')
 
-    ttr.compare(batch.ref_struct.mask, 're')
     ttr.compare({
         'mask': batch.ref_struct.mask,
         'charge': batch.ref_struct.charge,
@@ -84,40 +82,10 @@ def main():
     else:
         device = torch.device('cpu')
 
-    # device = torch.device('cpu')
     batch: Batch = tree_map(lambda x: x.to(device=device), batch)
 
     model = model.to(device=device)
     model.eval()
-
-    padded_atom_count = batch.ref_struct.atom_count
-    atom_count = batch.ref_struct.unpadded_atom_count
-    key_inds = AtomLayout.calculate_key_inds(atom_count, padded_atom_count)
-    BLOCK_SIZE=32
-    num_blocks = padded_atom_count // BLOCK_SIZE
-
-    kv_num_blocks = torch.zeros(num_blocks, dtype=int)
-    kv_indices = torch.full((num_blocks, num_blocks), dtype=int, fill_value=int(1e6))
-
-
-    mask_left_bound = key_inds[:, 0].float().detach()
-    mask_right_bound = key_inds[:, -1].float().detach()
-
-    def mask_mod(batch, head, q, k):
-        return (q < atom_count) & (mask_left_bound[q//32] <= k) & (k <= mask_right_bound[q//32])
-
-    for i_block in range(num_blocks):
-        if i_block*BLOCK_SIZE >= atom_count:
-            continue
-        lower = key_inds[i_block][0] // BLOCK_SIZE
-        upper = key_inds[i_block][-1] // BLOCK_SIZE + 1
-        kv_num_blocks[i_block] = upper - lower
-        kv_indices[i_block] = torch.arange(num_blocks).roll(-lower.item(), dims=0)
-
-    kv_num_blocks = kv_num_blocks.reshape(1, 1, num_blocks)
-    kv_indices = kv_indices.reshape(1, 1, num_blocks, num_blocks)
-
-    batch.ref_struct.block_mask = BlockMask.from_kv_blocks(kv_num_blocks, kv_indices, BLOCK_SIZE=BLOCK_SIZE, mask_mod=mask_mod)
 
     s_input, s_trunk, z_trunk, rel_enc = model.evoformer(batch)
     ttr.compare(s_trunk, 'evoformer/single')
@@ -140,8 +108,8 @@ def main():
 
 
     diffusion_randomness = {
-        'init_pos': ttr.load('diffusion/initial_positions', processing=[indexing(0), t2q, to_device, to_float]),
-        'noise': ttr.load_all('diffusion/noise', processing=[indexing(0), t2q, to_device, to_float]),
+        'init_pos': ttr.load('diffusion/initial_positions', processing=[to_device, indexing(0), t2q, to_float]),
+        'noise': ttr.load_all('diffusion/noise', processing=[to_device, indexing(0), t2q, to_float]),
         'aug_rot': ttr.load_all('diffusion/rand_aug/rot', processing=[indexing(0), to_device, to_float]),
         'aug_trans': ttr.load_all('diffusion/rand_aug/trans', processing=[indexing(0), to_device, to_float]),
     }
@@ -149,7 +117,7 @@ def main():
     with ttr.Chapter('diffusion'):
         diff_x = model.diffusion_sampler(model.diffusion_module,
                                 s_input, s_trunk, z_trunk, rel_enc, 
-                                batch.ref_struct, batch.token_features['single_mask'], noise_data=diffusion_randomness)
+                                batch.ref_struct, batch.token_features.mask, noise_data=diffusion_randomness)
 
     diff_x = batch.ref_struct.to_token_layout(diff_x)
 

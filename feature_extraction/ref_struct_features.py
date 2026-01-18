@@ -1,8 +1,9 @@
 from dataclasses import dataclass, fields
+import math
 from typing import Optional
 
 import numpy as np
-from torch.nn.attention.flex_attention import BlockMask
+from torch.nn.attention.flex_attention import create_block_mask, BlockMask
 from torch.nn import functional as F
 import rdkit
 import torch
@@ -29,11 +30,30 @@ class RefStructFeatures:
     mask: Array
     ref_space_uid: Array
     token_index: Array
-    block_mask: Optional[BlockMask] = None
 
     def map_arrays(self, fn):
         field_dict = {f.name: fn(getattr(self, f.name)) for f in fields(self)}
         return RefStructFeatures(**field_dict)
+
+    @property
+    def block_mask(self) -> BlockMask:
+        unpadded_atom_count = self.unpadded_atom_count
+        centers = torch.arange(16, self.atom_count, 32, device=self.mask.device, dtype=torch.int32)
+        left_bounds = centers - 64
+        right_bounds = centers + 64
+        borders = torch.stack((left_bounds, right_bounds), dim=-1)
+        exceeding_left = left_bounds < 0
+        exceeding_right = right_bounds >= unpadded_atom_count
+        borders[exceeding_left] -= left_bounds[exceeding_left, None]
+        borders[exceeding_right] -= (right_bounds[exceeding_right, None] - unpadded_atom_count)
+        left_bounds, right_bounds = borders[..., 0].detach(), borders[..., 1].detach()
+
+        def mask_mod(b, h, q, k):
+            return (q < unpadded_atom_count) & (left_bounds[q//32] <= k) & (k < right_bounds[q//32])
+        
+        batch_size = math.prod(self.mask.shape[:-2])
+        return create_block_mask(mask_mod, batch_size, None, self.atom_count, self.atom_count, self.mask.device)
+
 
     @property
     def unpadded_atom_count(self):
@@ -50,8 +70,8 @@ class RefStructFeatures:
     def token_layout_ref_mask(self):
         token_count = self.atom_count // 24
 
-        token_atom_counts = F.one_hot(torch.tensor(self.token_index[self.mask]), num_classes=token_count).sum(dim=-2)
-        ref_mask = torch.arange(24) < token_atom_counts[..., None]
+        token_atom_counts = F.one_hot(torch.as_tensor(self.token_index[self.mask]), num_classes=token_count).sum(dim=-2)
+        ref_mask = torch.arange(24, device=self.mask.device) < token_atom_counts[..., None]
         ref_mask = utils.pad_to_shape(ref_mask, (token_count, 24))
 
         if isinstance(self.mask, np.ndarray):
@@ -70,7 +90,7 @@ class RefStructFeatures:
             feature = np.array(feature)
             out = np.zeros(out_shape, dtype=feature.dtype)
         else:
-            feature = torch.tensor(feature)
+            feature = torch.as_tensor(feature)
             out = torch.zeros(out_shape, dtype=feature.dtype, device=feature.device)
         out[token_layout_ref_mask] = feature[self.mask]
 
@@ -80,8 +100,8 @@ class RefStructFeatures:
     def patch_atom_dimension(self, feature):
         batch_shape = self.element.shape[:-1]
         token_count = self.atom_count // 24
-        unsqueezed_shape = batch_shape + (token_count, 1) + feature.shape[len(batch_shape) + 1]
-        broadcasted_shape = batch_shape + (token_count, 24) + feature.shape[len(batch_shape) + 1]
+        unsqueezed_shape = batch_shape + (token_count, 1) + feature.shape[len(batch_shape) + 1:]
+        broadcasted_shape = batch_shape + (token_count, 24) + feature.shape[len(batch_shape) + 1:]
 
         feature = feature.reshape(unsqueezed_shape)
         if isinstance(self.mask, np.ndarray):
@@ -104,7 +124,7 @@ class RefStructFeatures:
                 feature = feature[len()]
             out = np.zeros(out_shape, dtype=feature.dtype)
         else:
-            feature = torch.tensor(feature)
+            feature = torch.as_tensor(feature)
             out = torch.zeros(out_shape, dtype=feature.dtype, device=feature.device)
 
         out[self.mask] = feature[self.token_layout_ref_mask]
@@ -130,7 +150,6 @@ class CalculateRefStructFeatures(Transform):
 
     @staticmethod
     def calculate_ref_positions(atom_array: AtomArray):
-        print('Starting ref positions...')
         residue_borders = get_residue_starts(atom_array, add_exclusive_stop=True)
         residue_starts, residue_ends = residue_borders[:-1], residue_borders[1:]
         res_names = atom_array.res_name[residue_starts]

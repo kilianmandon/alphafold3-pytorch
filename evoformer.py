@@ -46,30 +46,22 @@ class Evoformer(nn.Module):
 
         s_input, s_init, z_init, rel_enc = self.input_embedder(batch)
 
-        with ttr.Chapter('evoformer'):
-            prev_s = torch.zeros(batch_shape+(N_token, c_s), device=device, dtype=torch.float32)
-            prev_z = torch.zeros(batch_shape+(N_token, N_token, c_z), device=device, dtype=torch.float32)
+        prev_s = torch.zeros(batch_shape+(N_token, c_s), device=device, dtype=torch.float32)
+        prev_z = torch.zeros(batch_shape+(N_token, N_token, c_z), device=device, dtype=torch.float32)
 
-            for i in tqdm.tqdm(range(self.N_cycle)):
-                sub_batch = copy.deepcopy(batch)
-                sub_batch.msa_features.msa_feat = sub_batch.msa_features.msa_feat[..., i]
-                sub_batch.msa_features.msa_mask = sub_batch.msa_features.msa_mask[..., i]
+        for i in tqdm.tqdm(range(self.N_cycle)):
+            sub_batch = copy.deepcopy(batch)
+            sub_batch.msa_features.msa_feat = sub_batch.msa_features.msa_feat[..., i]
+            sub_batch.msa_features.msa_mask = sub_batch.msa_features.msa_mask[..., i]
 
-                z = z_init + self.prev_z_embedding(self.layer_norm_prev_z(prev_z))
-                # z = ttr.compare(z, 'z_3_bonds_emb')
-                with ttr.Chapter('template_embedding'):
-                    z += self.template_embedder(batch, z)
-                # z = ttr.compare(z, 'z_4_templates_emb')
-                # Note: += in the paper for the next line, not +
-                z = self.msa_module(sub_batch, s_input, z)
-                # z = ttr.compare(z, 'z_5_msa_emb')
-                s = s_init + self.prev_s_embedding(self.layer_norm_prev_s(prev_s))
-                # s_init = ttr.compare(s_init, 's_0_init')
-                # s = ttr.compare(s, 's_1_prev')
+            z = z_init + self.prev_z_embedding(self.layer_norm_prev_z(prev_z))
+            z += self.template_embedder(batch, z)
+            # Note: += in the paper for the next line, not +
+            z = self.msa_module(sub_batch, s_input, z)
+            s = s_init + self.prev_s_embedding(self.layer_norm_prev_s(prev_s))
 
-                with ttr.Chapter('pairformer'):
-                    s, z = self.pairformer(s, z, single_mask)
-                prev_s, prev_z = s, z
+            s, z = self.pairformer(s, z, single_mask)
+            prev_s, prev_z = s, z
 
         return s_input, s, z, rel_enc
 
@@ -323,17 +315,11 @@ class PairStack(nn.Module):
         self.transition = Transition(c_z, n=N_intermediate)
 
     def forward(self, z, single_mask):
-        # ttr.compare(z, 'z_0_init')
         z += self.dropout_rowwise(self.triangle_mult_outgoing(z, single_mask))
-        # ttr.compare(z, 'z_1_tri_mul_out')
         z += self.dropout_rowwise(self.triangle_mult_incoming(z, single_mask))
-        # ttr.compare(z, 'z_2_tri_mul_inc')
         z += self.dropout_rowwise(self.triangle_att_starting(z, single_mask))
-        # ttr.compare(z, 'z_3_att_1')
         z += self.dropout_columnwise(self.triangle_att_ending(z, single_mask))
-        # ttr.compare(z, 'z_4_att_2')
         z += self.transition(z)
-        # ttr.compare(z, 'z_5_transition')
         return z
 
 
@@ -347,14 +333,9 @@ class MSAModuleBlock(nn.Module):
         self.core = PairStack(c_z)
 
     def forward(self, m, z, msa_mask, single_mask):
-        # z = ttr.compare(z, 'pair_act_0_init')
-        # m = ttr.compare(m, 'msa_act_0_init')
         z += self.opm(m, msa_mask)
-        # z = ttr.compare(z, 'pair_act_1_opm')
         m += self.dropout_rowwise(self.msa_pair_weighted(m, z, single_mask))
-        # m = ttr.compare(m, 'msa_act_1_msa_att')
         m += self.transition(m)
-        # m = ttr.compare(m, 'msa_act_2_transition')
 
         z = self.core(z, single_mask)
         return m, z
@@ -372,15 +353,11 @@ class MSAModule(nn.Module):
         msa_feat = batch.msa_features.msa_feat
         msa_mask = batch.msa_features.msa_mask
         single_mask = batch.token_features.mask
-        ttr.compare(msa_feat, 'msa_feat')
         m = self.linear_m(msa_feat)
-        ttr.compare(m, 'msa_activations')
         m += self.linear_s(s)
-        ttr.compare(m, 'msa_extra_activations')
 
-        with ttr.Chapter('extra_msa_stack'):
-            for block in self.blocks:
-                m, z = block(m, z, msa_mask, single_mask)
+        for block in self.blocks:
+            m, z = block(m, z, msa_mask, single_mask)
         return z
 
 

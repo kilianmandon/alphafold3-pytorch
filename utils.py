@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 
-import atom_layout
 
 Array = np.ndarray | torch.Tensor
 

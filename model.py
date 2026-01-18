@@ -18,13 +18,11 @@ class Model(nn.Module):
         ref_struct = batch.ref_struct
         single_mask = batch.token_features.mask
 
-        with ttr.Chapter('evoformer'):
-            s_input, s_trunk, z_trunk, rel_enc = self.evoformer(batch)
+        s_input, s_trunk, z_trunk, rel_enc = self.evoformer(batch)
 
-        with ttr.Chapter('diffusion'):
-            x_flat = self.diffusion_sampler(self.diffusion_module,
-                                s_input, s_trunk, z_trunk, rel_enc, 
-                                ref_struct, single_mask)
+        x_flat = self.diffusion_sampler(self.diffusion_module,
+                            s_input, s_trunk, z_trunk, rel_enc, 
+                            ref_struct, single_mask)
 
 
         return x_flat

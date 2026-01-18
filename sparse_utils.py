@@ -20,6 +20,7 @@ class BlockSparseTensor:
     @staticmethod
     def block_mask_to_index(block_mask: BlockMask):
         batch_size, _, n_blocks = block_mask.kv_num_blocks.shape
+        device = block_mask.kv_num_blocks.device
         block_size = block_mask.BLOCK_SIZE[0]
         n_tokens = block_size * n_blocks
 
@@ -29,14 +30,14 @@ class BlockSparseTensor:
         n_blocks_total = torch.sum(num_blocks_per_batch)
 
         # batch_num_blocks = [3, 4, 2] => batch_idx = [0, 0, 0, 1, 1, 1, 1, 2, 2, ...]
-        batch_idx = torch.repeat_interleave(torch.arange(batch_size), num_blocks_per_batch)
+        batch_idx = torch.repeat_interleave(torch.arange(batch_size, device=device), num_blocks_per_batch)
         batch_start_indices = torch.nn.functional.pad(
             torch.cumsum(num_blocks_per_batch, dim=0),
             (1, 0)
         )
         batch_starting_points = batch_start_indices[batch_idx]
 
-        q_block_idx_total = torch.repeat_interleave(torch.arange(n_blocks), kv_num_blocks_no_heads.flatten())
+        q_block_idx_total = torch.repeat_interleave(torch.arange(n_blocks, device=device), kv_num_blocks_no_heads.flatten())
         q_block_idx = q_block_idx_total - q_block_idx_total[batch_starting_points]
         q_start_indices = torch.nn.functional.pad(
             torch.cumsum(kv_num_blocks_no_heads.flatten(), dim=0),
@@ -44,7 +45,7 @@ class BlockSparseTensor:
         )
         q_block_starting_points = q_start_indices[q_block_idx_total]
 
-        repeating_range = torch.arange(n_blocks_total)
+        repeating_range = torch.arange(n_blocks_total, device=device)
         repeating_range = repeating_range - repeating_range[q_block_starting_points]
 
         k_block_idx = kv_inds_no_heads[batch_idx, q_block_idx, repeating_range]
@@ -54,8 +55,8 @@ class BlockSparseTensor:
         q_block_idx = q_block_idx.reshape(-1, 1, 1).broadcast_to(out_shape)
         k_block_idx = k_block_idx.reshape(-1, 1, 1).broadcast_to(out_shape)
 
-        q_within_block = torch.arange(block_size).reshape(1, -1, 1).broadcast_to(out_shape)
-        k_within_block = torch.arange(block_size).reshape(1, 1, -1).broadcast_to(out_shape)
+        q_within_block = torch.arange(block_size, device=device).reshape(1, -1, 1).broadcast_to(out_shape)
+        k_within_block = torch.arange(block_size, device=device).reshape(1, 1, -1).broadcast_to(out_shape)
 
         q_full_idx = q_block_idx * block_size + q_within_block
         k_full_idx = k_block_idx * block_size + k_within_block
@@ -148,9 +149,12 @@ class BlockSparseTensor:
     def __eq__(self, other):
         return self._wrap(self.physical == self._unwrap(other))
 
-    def __torch_function__(self, func, types, args=(), kwargs=None):
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
         if kwargs is None:
             kwargs = {}
+
+        bst = next(x for x in args if isinstance(x, BlockSparseTensor))
 
         def unwrap(x):
             return x.physical if isinstance(x, BlockSparseTensor) else x
@@ -161,9 +165,9 @@ class BlockSparseTensor:
         result = func(*unwrapped_args, **unwrapped_kwargs)
 
         if isinstance(result, torch.Tensor):
-            return self._wrap(result)
+            return bst._wrap(result)
         elif isinstance(result, tuple):
-            return tuple(self._wrap(r) if isinstance(r, torch.Tensor) else r for r in result)
+            return tuple(bst._wrap(r) if isinstance(r, torch.Tensor) else r for r in result)
         else:
             return result
 

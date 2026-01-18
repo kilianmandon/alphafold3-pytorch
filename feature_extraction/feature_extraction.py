@@ -14,8 +14,6 @@ from atomworks.ml.transforms.atomize import AtomizeByCCDName
 from atomworks.ml.transforms.base import Compose, Transform
 from atomworks.ml.transforms.filters import RemoveHydrogens, RemoveTerminalOxygen
 
-from atom_layout import AtomLayout
-import utils
 from feature_extraction.contact_features import CalculateContactMatrix
 from feature_extraction.msa_features import CalculateMSAFeatures, MSAFeatures
 from feature_extraction.ref_struct_features import CalculateRefStructFeatures, RefStructFeatures

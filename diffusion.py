@@ -28,7 +28,7 @@ class DiffusionModule(nn.Module):
         # t_hat has shape (**batch_shape, )
 
         s, z = self.diffusion_conditioning(t_hat, s_inputs, s_trunk, z_trunk, rel_enc)
-        r=x_noisy / torch.sqrt(t_hat**2+self.sigma_data**2)[..., None, None, None]
+        r=x_noisy / torch.sqrt(t_hat**2+self.sigma_data**2)[..., None, None]
 
 
         a, (q_skip, c_skip, p_skip) = self.atom_att_enc(ref_struct, r=r, s_trunk=s_trunk, z=z)
@@ -43,8 +43,8 @@ class DiffusionModule(nn.Module):
 
         d_skip = self.sigma_data**2 / (self.sigma_data**2+t_hat**2)
         d_scale = self.sigma_data * t_hat / torch.sqrt(self.sigma_data**2 + t_hat**2)
-        d_skip = d_skip[..., None, None, None]
-        d_scale = d_scale[..., None, None, None]
+        d_skip = d_skip[..., None, None]
+        d_scale = d_scale[..., None, None]
         
         x_out = d_skip * x_noisy + d_scale * r_update
 
@@ -197,12 +197,12 @@ class CenterRandomAugmentation(nn.Module):
         device = x.device
         batch_shape = x.shape[:-2]
 
-        x = x - utils.masked_mean(x, ref_struct.mask[..., None], dim=(-2), keepdim=True)
+        x = x - utils.masked_mean(x, ref_struct.mask[..., None], axis=(-2), keepdims=True)
 
         if rand_rot is None:
-            rand_quats = torch.randn(batch_shape+(1,1,4), device=device)
+            rand_quats = torch.randn(batch_shape+(1,4), device=device)
             rand_quats /= torch.linalg.norm(rand_quats, dim=-1, keepdim=True)
-            t = self.s_trans * torch.randn(batch_shape+(1,1,3), device=device)
+            t = self.s_trans * torch.randn(batch_shape+(1,3), device=device)
 
             x = utils.quat_vector_mul(rand_quats, x) + t
         else:

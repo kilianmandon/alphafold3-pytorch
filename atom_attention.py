@@ -4,7 +4,7 @@ from torch import nn
 from feature_extraction.ref_struct_features import RefStructFeatures
 from sparse_utils import BlockSparseTensor
 import tensortrace as ttr
-from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask, BlockMask
 
 from common import AdaptiveLayerNorm, AdaptiveZeroInit, ConditionedTransitionBlock
 import utils
@@ -51,7 +51,7 @@ class AtomAttentionPairBias(nn.Module):
         self.c = c
         self.N_head = N_head
 
-    def forward(self, single_act, pair_act, single_cond, block_mask):
+    def forward(self, single_act, pair_act, single_cond, block_mask: BlockMask):
         batch_shape = single_act.shape[:-2]
         N_head = self.N_head
         N_token = single_act.shape[-2]
@@ -181,9 +181,10 @@ class AtomAttentionEncoder(nn.Module):
 
             batch_idx, p_idx, l_idx = BlockSparseTensor.block_mask_to_index(block_mask)
             token_indices = utils.unify_batch_dimension(ref_struct.token_index, batch_shape)
+            z = utils.unify_batch_dimension(z, batch_shape)
             i_idx = token_indices[batch_idx, p_idx]
             j_idx = token_indices[batch_idx, l_idx]
-            z = z[batch_idx, i_idx, j_idx]
+            z = BlockSparseTensor(z[batch_idx, i_idx, j_idx], block_mask)
 
             single_cond += self.trunk_linear_s(self.trunk_layer_norm_s(s_trunk))
             pair_act += self.trunk_linear_z(self.trunk_layer_norm_z(z))
@@ -200,10 +201,8 @@ class AtomAttentionEncoder(nn.Module):
 
         pair_act += row_act + col_act
         pair_act += self.embed_pair_mask(offsets_valid)
-        # pair_act = ttr.compare(pair_act, 'pair_act_3_offsets_valid')
 
         pair_act += self.pair_mlp(pair_act)
-        # pair_act = ttr.compare(pair_act, 'pair_act_4_mlp')
 
         single_act = self.atom_transformer(
             single_act,
@@ -211,15 +210,11 @@ class AtomAttentionEncoder(nn.Module):
             single_cond,
             block_mask
         )
-        # queries_act = ttr.compare(queries_act, 'queries_act_1_cross_att')
 
-        # token_act = atom_layout.queries_to_tokens(single_act, 1)
 
         token_act = ref_struct.to_token_layout(single_act)
         token_act = torch.relu(self.project_atom_features(token_act))
 
-        
-        # token_act has shape (*, N_atoms, c)
         token_act = utils.masked_mean(token_act, ref_struct.token_layout_ref_mask[..., None], axis=-2)
 
         skip = (single_act, single_cond, pair_act)

@@ -84,6 +84,7 @@ class TensorTrace:
         self.tensor_dir = self.base_path / 'tensors'
         self.mask_dir = self.base_path / 'masks'
         self.chapters = []
+        self.mode = mode
 
         self.specs: dict[str, DiskTensorSpec] = {}
         self.loading_index: dict[str, DiskTensorSpec] = {}
@@ -202,9 +203,11 @@ class TensorTrace:
         
         if self.index_path.exists():
             self.load_data()
-        else:
+        elif self.mode == 'write':
             self.tensor_dir.mkdir(parents=True, exist_ok=True)
             self.mask_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            raise FileNotFoundError(f'Trace at {self.base_path} does not exist.')
     
     def __exit__(self, type, value, traceback):
         print('Beginning exit...')
@@ -262,7 +265,7 @@ class TensorTrace:
         full_name = f'{chapters_prefix}{name}'
         
         entries = {
-            k.removeprefix(chapters_prefix): self.load_tensor(k, with_mask=with_mask, silent_loop=silent_loop, load_single=load_single) for k in self.specs if k.startswith(full_name)
+            k.removeprefix(chapters_prefix): self.load_tensor(k, with_mask=with_mask, silent_loop=silent_loop, load_single=load_single) for k in self.specs if k==full_name or k.startswith(f'{full_name}/')
         }
 
         entries = _apply_processing(entries, processing, apply_to_mask=True)
