@@ -1,9 +1,11 @@
 from dataclasses import dataclass, fields
+import math
 import numpy as np
 from atomworks.constants import UNKNOWN_AA, STANDARD_RNA, UNKNOWN_RNA, STANDARD_DNA, UNKNOWN_DNA, STANDARD_AA
 from atomworks.ml.transforms.base import Transform
 from atomworks.ml.utils.token import get_token_starts
 import torch
+from torch.nn.attention.flex_attention import create_block_mask, BlockMask
 
 from feature_extraction.msa_features import MSAFeatures
 from residue_constants import AF3_TOKENS_MAP
@@ -41,6 +43,14 @@ class TokenFeatures:
     @property
     def token_count(self):
         return self.residue_index.shape[-1]
+
+    @property
+    def block_mask(self) -> BlockMask:
+        def mask_mod(b, h, q, k):
+            return self.mask[k]
+        
+        batch_size = math.prod(self.mask.shape[:-2])
+        return create_block_mask(mask_mod, batch_size, None, self.token_count, self.token_count, self.mask.device)
     
 
 

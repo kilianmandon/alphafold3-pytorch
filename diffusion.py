@@ -1,10 +1,11 @@
+from torch.nn.attention.flex_attention import BlockMask
 from torch import nn
-from torch.nn import functional as F
 import torch
 import tqdm
 
-from atom_attention import AtomAttentionDecoder, AtomAttentionEncoder
+from atom_attention import AtomAttentionDecoder, AtomAttentionEncoder, DiffusionTransformer
 from common import AttentionPairBias, ConditionedTransitionBlock, Transition
+from feature_extraction.feature_extraction import Batch
 from feature_extraction.ref_struct_features import RefStructFeatures
 import utils
 
@@ -23,10 +24,12 @@ class DiffusionModule(nn.Module):
 
         self.sigma_data = sigma_data
 
-    def forward(self, x_noisy, t_hat, s_inputs, s_trunk, z_trunk, rel_enc, ref_struct, mask):
+    def forward(self, x_noisy, t_hat, s_inputs, s_trunk, z_trunk, rel_enc, batch: Batch):
         # x_noisy has shape (**batch_shape, N_blocks, 32, 3)
         # t_hat has shape (**batch_shape, )
 
+        ref_struct = batch.ref_struct
+        token_features = batch.token_features
         s, z = self.diffusion_conditioning(t_hat, s_inputs, s_trunk, z_trunk, rel_enc)
         r=x_noisy / torch.sqrt(t_hat**2+self.sigma_data**2)[..., None, None]
 
@@ -35,7 +38,7 @@ class DiffusionModule(nn.Module):
 
 
         a += self.linear_s(self.layer_norm_s(s))
-        a = self.diffusion_transformer(a, s, z, mask)
+        a = self.diffusion_transformer(a, s, z, token_features.block_mask)
 
         a = self.layer_norm_a(a)
 
@@ -114,22 +117,7 @@ def apply_layernorm_masked(inp, layer_norm, mask):
     return full_out
 
 
-class DiffusionTransformer(nn.Module):
-    def __init__(self, c_a, c_z, N_head, c_s, N_block):
-        super().__init__()
-        self.att_pair_bias = nn.ModuleList([AttentionPairBias(c_a, c_z, N_head, c_s, adaptive=True, biased_layer_norm_z=False) for _ in range(N_block)])
-        self.cond_trans = nn.ModuleList([ConditionedTransitionBlock(c_a, c_s) for _ in range(N_block)])
-        self.N_block = N_block
 
-
-    def forward(self, a, s, z, mask):
-        for att_pair_block, cond_trans_block in zip(self.att_pair_bias, self.cond_trans):
-            # b = att_pair_block(a, z, mask, s=s)
-            # a = b + cond_trans_block(a, s)
-            a += att_pair_block(a, z, mask, s=s)
-            a += cond_trans_block(a, s)
-
-        return a
 
 class DiffusionSampler(nn.Module):
     def __init__(self, noise_steps, 
@@ -146,7 +134,9 @@ class DiffusionSampler(nn.Module):
     def noise_schedule(self, t, sigma_data=16, smin=0.0004, smax=160.0, p=7):
         return sigma_data * (smax ** (1/p) + t * (smin**(1/p) - smax**(1/p))) ** p
 
-    def forward(self, diffusion_module, s_inputs, s_trunk, z_trunk, rel_enc, ref_struct: RefStructFeatures, mask, noise_data=None):
+    def forward(self, diffusion_module, s_inputs, s_trunk, z_trunk, rel_enc, batch: Batch, noise_data=None):
+        ref_struct = batch.ref_struct
+        token_features = batch.token_features
         # q2k_mask has shape (**batch_shape, N_block, 32,)
         batch_shape = s_trunk.shape[:-2]
         device = s_trunk.device

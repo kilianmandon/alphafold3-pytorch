@@ -117,7 +117,7 @@ def main():
     with ttr.Chapter('diffusion'):
         diff_x = model.diffusion_sampler(model.diffusion_module,
                                 s_input, s_trunk, z_trunk, rel_enc, 
-                                batch.ref_struct, batch.token_features.mask, noise_data=diffusion_randomness)
+                                batch, noise_data=diffusion_randomness)
 
     diff_x = batch.ref_struct.to_token_layout(diff_x)
 

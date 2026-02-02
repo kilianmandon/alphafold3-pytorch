@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 
+from sparse_utils import BlockSparseTensor
+
 
 Array = np.ndarray | torch.Tensor
 
@@ -125,7 +127,10 @@ def quat_vector_mul(q, v):
     return v_out
 
 
-def unify_batch_dimension(x: torch.Tensor, batch_shape):
+def unify_batch_dimension(x: torch.Tensor | BlockSparseTensor, batch_shape):
+    if isinstance(x, BlockSparseTensor):
+        return x
+
     if len(batch_shape) == 0:
         return x[None, ...]
     else:

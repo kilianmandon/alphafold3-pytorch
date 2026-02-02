@@ -6,7 +6,7 @@ from sparse_utils import BlockSparseTensor
 import tensortrace as ttr
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask, BlockMask
 
-from common import AdaptiveLayerNorm, AdaptiveZeroInit, ConditionedTransitionBlock
+from common import AdaptiveLayerNorm, AdaptiveZeroInit, AttentionPairBias, ConditionedTransitionBlock
 import utils
 
 def hotfix_mangle_layout(ref_space_uid, ref_struct: RefStructFeatures):
@@ -15,105 +15,9 @@ def hotfix_mangle_layout(ref_space_uid, ref_struct: RefStructFeatures):
     ref_space_uid = torch.flatten(ref_space_uid, start_dim=-2)
     return ref_space_uid
 
-def build_block_mask(sparse_mask, N_head=4):
-    batch_shape = sparse_mask.shape[:-2]
-    Q, V = sparse_mask.shape[-2:]
-    B = math.prod(list(batch_shape))
-
-    def builder(b, h, q_idx, kv_idx):
-        batch_idx = torch.unravel_index(b, batch_shape)
-        return sparse_mask[*batch_idx, q_idx, kv_idx]
-
-    return create_block_mask(builder, B, N_head, Q, V)
-
-
-class AtomAttentionPairBias(nn.Module):
-    def __init__(self, N_head, c_in=128, c_z=16):
-        super().__init__()
-        # According to the paper, these should be shared
-        self.layer_norm_q = AdaptiveLayerNorm(c_in, c_in)
-        self.layer_norm_k = AdaptiveLayerNorm(c_in, c_in)
-        c = c_in//N_head
-
-        self.layer_norm_z = nn.LayerNorm(c_z, bias=False)
-        self.linear_q = nn.Linear(c_in, c*N_head)
-        self.linear_k = nn.Linear(c_in, c*N_head, bias=False)
-        self.linear_v = nn.Linear(c_in, c*N_head, bias=False)
-        self.linear_b = nn.Linear(c_z, N_head, bias=False)
-        self.linear_g = nn.Linear(c_in, c*N_head, bias=False)
-
-        if torch.cuda.is_available():
-            self.flex_attention = torch.compile(flex_attention)
-        else:
-            self.flex_attention = flex_attention
-
-        self.ada_zero_init = AdaptiveZeroInit(c_in, c_in, c_in)
-        self.c = c
-        self.N_head = N_head
-
-    def forward(self, single_act, pair_act, single_cond, block_mask: BlockMask):
-        batch_shape = single_act.shape[:-2]
-        N_head = self.N_head
-        N_token = single_act.shape[-2]
-        c = self.c
-
-        a_q = self.layer_norm_q(single_act, single_cond)
-        a_k = self.layer_norm_k(single_act, single_cond)
-
-        z = self.layer_norm_z(pair_act)
-        q = self.linear_q(a_q).unflatten(-1, (N_head, c))
-        k = self.linear_k(a_k).unflatten(-1, (N_head, c))
-        v = self.linear_v(a_k).unflatten(-1, (N_head, c))
-        g = self.linear_g(a_q).unflatten(-1, (N_head, c))
-
-        bias = self.linear_b(z)
-        
-
-        q = torch.einsum('...ihc->...hic', q)
-        k = torch.einsum('...jhc->...hjc', k)
-        v = torch.einsum('...jhc->...hjc', v)
-
-        q = utils.unify_batch_dimension(q, batch_shape)
-        k = utils.unify_batch_dimension(k, batch_shape)
-        v = utils.unify_batch_dimension(v, batch_shape)
-
-        def bias_score_mod(score, b, h, q_idx, kv_idx):
-            return score + bias[b, q_idx, kv_idx, h]
-
-        q = q.contiguous(); k = k.contiguous(); v = v.contiguous()
-        o = self.flex_attention(q, k, v, score_mod=bias_score_mod, block_mask=block_mask)
-        o = o.reshape(batch_shape + (N_head, N_token, c))
-        o = torch.einsum('...hjc->...jhc', o)
-
-        o = torch.sigmoid(g) * o
-        o = o.flatten(-2)
-
-        # According to the paper, there should be an additional linear layer before ada_zero_init
-        o = self.ada_zero_init(o, single_cond)
-
-        return o
-
-
-
-class AtomTransformer(nn.Module):
-    def __init__(self, c_in=16):
-        super().__init__()
-        self.N_block = 3
-        self.N_head = 4
-        self.attn_blocks = nn.ModuleList(
-            [AtomAttentionPairBias(self.N_head) for _ in range(self.N_block)])
-        self.transition_blocks = nn.ModuleList(
-            [ConditionedTransitionBlock(c_a=128, c_s=128, n=2) for _ in range(self.N_block)])
-
-    def forward(self, single_act, pair_act, single_cond, block_mask):
-        for attn_block, transition_block in zip(self.attn_blocks, self.transition_blocks):
-            single_act += attn_block.forward(single_act, pair_act, single_cond, block_mask)
-            single_act += transition_block(single_act, single_cond)
-
-        return single_act
-
 
 class AtomAttentionEncoder(nn.Module):
+    # Implements Algorithm 5 from the paper
     def __init__(self, c_s, c_z, c_atom=128, c_atom_pair=16, c_token=384, use_trunk=False):
         super().__init__()
         self.embed_ref_pos = nn.Linear(3, c_atom, bias=False)
@@ -137,7 +41,7 @@ class AtomAttentionEncoder(nn.Module):
             nn.Linear(c_atom_pair, c_atom_pair, bias=False)
         )
 
-        self.atom_transformer = AtomTransformer()
+        self.atom_transformer = DiffusionTransformer(c_a=128, c_z=16, N_head=4, c_s=128, N_block=3, split_ada_qk=True)
         self.project_atom_features = nn.Linear(c_atom, c_token, bias=False)
 
         self.use_trunk = use_trunk
@@ -206,8 +110,8 @@ class AtomAttentionEncoder(nn.Module):
 
         single_act = self.atom_transformer(
             single_act,
-            pair_act,
             single_cond,
+            pair_act,
             block_mask
         )
 
@@ -245,10 +149,11 @@ class AtomAttentionEncoder(nn.Module):
 
 
 class AtomAttentionDecoder(nn.Module):
+    # Implements Algorithm 6 from the paper
     def __init__(self, c_a, c_q):
         super().__init__()
         self.linear_a = nn.Linear(c_a, c_q, bias=False)
-        self.atom_transformer = AtomTransformer()
+        self.atom_transformer = DiffusionTransformer(c_a=128, c_z=16, N_head=4, c_s=128, N_block=3, split_ada_qk=True)
         self.layer_norm_q = nn.LayerNorm(c_q, bias=False)
         self.linear_out = nn.Linear(c_q, 3, bias=False)
 
@@ -256,6 +161,21 @@ class AtomAttentionDecoder(nn.Module):
         a = self.linear_a(a)
         a_q = ref_struct.to_atom_layout(a, has_atom_dimension = False)
         q = a_q + q_skip
-        q = self.atom_transformer(q, p_skip, c_skip, ref_struct.block_mask)
+        q = self.atom_transformer(q, c_skip, p_skip, ref_struct.block_mask)
         r = self.linear_out(self.layer_norm_q(q))
         return r
+
+class DiffusionTransformer(nn.Module):
+    def __init__(self, c_a, c_z, N_head, c_s, N_block, split_ada_qk=False):
+        super().__init__()
+        self.att_pair_bias = nn.ModuleList([AttentionPairBias(c_a, c_z, N_head, c_s, adaptive=True, biased_layer_norm_z=False, split_ada_qk=split_ada_qk) for _ in range(N_block)])
+        self.cond_trans = nn.ModuleList([ConditionedTransitionBlock(c_a, c_s) for _ in range(N_block)])
+        self.N_block = N_block
+
+
+    def forward(self, a, s, z, block_mask: BlockMask):
+        for att_pair_block, cond_trans_block in zip(self.att_pair_bias, self.cond_trans):
+            a += att_pair_block(a, z, block_mask, s=s)
+            a += cond_trans_block(a, s)
+
+        return a

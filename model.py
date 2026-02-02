@@ -8,6 +8,7 @@ import utils
 import tensortrace as ttr
 
 class Model(nn.Module):
+    # Implements Algorithm 1 from the paper
     def __init__(self, N_cycle=11, noise_steps=30):
         super().__init__()
         self.evoformer = Evoformer(N_cycle=N_cycle)
@@ -21,8 +22,7 @@ class Model(nn.Module):
         s_input, s_trunk, z_trunk, rel_enc = self.evoformer(batch)
 
         x_flat = self.diffusion_sampler(self.diffusion_module,
-                            s_input, s_trunk, z_trunk, rel_enc, 
-                            ref_struct, single_mask)
+                            s_input, s_trunk, z_trunk, rel_enc, batch)
 
 
         return x_flat

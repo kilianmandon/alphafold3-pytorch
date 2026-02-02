@@ -43,6 +43,7 @@ class InputEmbedder(nn.Module):
         self.atom_cross_att = AtomAttentionEncoder(c_s, c_z)
 
     def relative_encoding(self, batch: Batch, rmax=32, smax=2):
+        # Implements Algorithm 3 from the paper
         token_features = batch.token_features
         token_index = token_features.token_index
         residue_index = token_features.residue_index

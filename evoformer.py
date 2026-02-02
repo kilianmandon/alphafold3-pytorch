@@ -1,4 +1,6 @@
 import copy
+
+from numpy import single
 from feature_extraction.feature_extraction import Batch
 from feature_extraction.msa_features import MSAFeatures
 from feature_extraction.token_features import TokenFeatures
@@ -41,7 +43,6 @@ class Evoformer(nn.Module):
 
         batch_shape = msa_features.target_feat.shape[:-2]
         N_token = msa_features.target_feat.shape[-2]
-        single_mask = token_features.mask
         device = msa_features.target_feat.device
 
         s_input, s_init, z_init, rel_enc = self.input_embedder(batch)
@@ -60,7 +61,7 @@ class Evoformer(nn.Module):
             z = self.msa_module(sub_batch, s_input, z)
             s = s_init + self.prev_s_embedding(self.layer_norm_prev_s(prev_s))
 
-            s, z = self.pairformer(s, z, single_mask)
+            s, z = self.pairformer(s, z, token_features)
             prev_s, prev_z = s, z
 
         return s_input, s, z, rel_enc
@@ -361,8 +362,6 @@ class MSAModule(nn.Module):
         return z
 
 
-
-
 class PairFormerBlock(nn.Module):
     def __init__(self, c_z=128, c_s=384):
         super().__init__()
@@ -370,9 +369,11 @@ class PairFormerBlock(nn.Module):
         self.att_pair_bias = AttentionPairBias(c_s, c_z, N_head=16)
         self.single_transition = Transition(c_s)
 
-    def forward(self, s, z, single_mask):
+    def forward(self, s, z, token_features: TokenFeatures):
+        single_mask = token_features.mask
+        block_mask = token_features.block_mask
         z = self.core(z, single_mask)
-        s += self.att_pair_bias(s, z, single_mask)
+        s += self.att_pair_bias(s, z, block_mask)
         s += self.single_transition(s)
         return s, z
 
@@ -383,9 +384,9 @@ class PairFormer(nn.Module):
         self.blocks = nn.ModuleList([PairFormerBlock()
                                     for _ in range(N_block)])
 
-    def forward(self, s, z, single_mask):
-        for i, block in enumerate(self.blocks):
-            s, z = block(s, z, single_mask)
+    def forward(self, s, z, token_features: TokenFeatures):
+        for block in tqdm.tqdm(self.blocks):
+            s, z = block(s, z, token_features)
             # ttr.compare(s, 'iterations/single')
             # ttr.compare(z, 'iterations/pair')
         return s, z

@@ -1,4 +1,6 @@
 import math
+from torch.nn.attention.flex_attention import BlockMask, flex_attention
+import utils
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -37,11 +39,16 @@ class AdaptiveZeroInit(nn.Module):
 
 
 class AttentionPairBias(nn.Module):
-    def __init__(self, c_a, c_z, N_head, c_s=None, adaptive=False, biased_layer_norm_z=True):
+    def __init__(self, c_a, c_z, N_head, c_s=None, adaptive=False, biased_layer_norm_z=True, split_ada_qk=False):
         super().__init__()
         c = c_a//N_head
         if adaptive:
-            self.layer_norm_a = AdaptiveLayerNorm(c_a, c_s)
+            if split_ada_qk:
+                self.layer_norm_q = AdaptiveLayerNorm(c_a, c_s)
+                self.layer_norm_k = AdaptiveLayerNorm(c_a, c_s)
+            else:
+                self.layer_norm_a = AdaptiveLayerNorm(c_a, c_s)
+
             # Should be initialized with bias=-2
             self.linear_out_adaptive = nn.Linear(c_s, c_a)
         else:
@@ -55,35 +62,61 @@ class AttentionPairBias(nn.Module):
         self.linear_g = nn.Linear(c_a, c*N_head, bias=False)
         self.linear_out = nn.Linear(c*N_head, c_a, bias=False)
 
+        if torch.cuda.is_available():
+            self.flex_attention = torch.compile(flex_attention)
+        else:
+            self.flex_attention = flex_attention
+
         self.N_head = N_head
         self.c = c
         self.adaptive = adaptive
+        self.split_ada_qk = split_ada_qk
 
-    def forward(self, a, z, mask, s=None):
+    def forward(self, a, z, block_mask: BlockMask, s=None):
+        batch_shape = a.shape[:-2]
         N_head = self.N_head
+        N_token = a.shape[-2]
         c = self.c
 
         if s is not None:
-            a = self.layer_norm_a(a, s)
+            if self.split_ada_qk:
+                a_q = self.layer_norm_q(a, s)
+                a_k = self.layer_norm_k(a, s)
+            else:   
+                a_q = self.layer_norm_a(a, s)
+                a_k = a_q
         else:
-            a = self.layer_norm_a(a)
+            a_q = self.layer_norm_a(a)
+            a_k = a_q
 
-        q = self.linear_q(a).unflatten(-1, (N_head, c))
-        k = self.linear_k(a).unflatten(-1, (N_head, c))
-        v = self.linear_v(a).unflatten(-1, (N_head, c))
+        q = self.linear_q(a_q).unflatten(-1, (N_head, c))
+        k = self.linear_k(a_k).unflatten(-1, (N_head, c))
+        v = self.linear_v(a_k).unflatten(-1, (N_head, c))
+        g = self.linear_g(a_q).unflatten(-1, (N_head, c))
 
-        b = self.linear_b(self.layer_norm_z(z))
+        bias = self.linear_b(self.layer_norm_z(z))
 
-        g = torch.sigmoid(self.linear_g(a))
+        q = torch.einsum('...ihc->...hic', q)
+        k = torch.einsum('...jhc->...hjc', k)
+        v = torch.einsum('...jhc->...hjc', v)
 
+        q = utils.unify_batch_dimension(q, batch_shape)
+        k = utils.unify_batch_dimension(k, batch_shape)
+        v = utils.unify_batch_dimension(v, batch_shape)
+        bias = utils.unify_batch_dimension(bias, batch_shape)
 
-        q = q / math.sqrt(c)
-        att = torch.einsum('...ihc,...jhc->...ijh', q, k) + b
-        att += -1e9 * ~mask[..., None, :, None]
-        att = torch.softmax(att, dim=-2)
+        def bias_score_mod(score, b, h, q_idx, kv_idx):
+            return score + bias[b, q_idx, kv_idx, h]
 
-        o = torch.einsum('...ijh,...jhc->...ihc', att, v)
-        o = g * o.flatten(-2)
+        q = q.contiguous(); k = k.contiguous(); v = v.contiguous()
+        o = self.flex_attention(q, k, v, score_mod=bias_score_mod, block_mask=block_mask)
+
+        o = o.reshape(batch_shape + (N_head, N_token, c))
+        o = torch.einsum('...hjc->...jhc', o)
+
+        o = torch.sigmoid(g) * o
+        o = o.flatten(-2)
+
         o = self.linear_out(o)
 
         if self.adaptive:

@@ -56,102 +56,102 @@ def create_atom_att_encoder(jax_base, jax_sub, pytorch_base, use_trunk=False):
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/pair_input_layer_norm': {
             'split': 'XXX',
-            'scale': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.layer_norm_z{layer_norm_sparse_filler}.weight'
+            'scale': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.layer_norm_z{layer_norm_sparse_filler}.weight'
             # 'scale': f'{pytorch_base}.atom_transformer.pair_input_layer_norm.weight'
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/pair_logits_projection': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.linear_b{linear_sparse_filler}.weight',
+            'weights': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.linear_b{linear_sparse_filler}.weight',
             # 'flatten': (-2, -1),
             # 'weights': f'{pytorch_base}.atom_transformer.pair_logits_projection.weight',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderqsingle_cond_layer_norm': {
             'split': 'XXX',
-            'scale': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.layer_norm_q.single_cond_layer_norm.weight',
+            'scale': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.layer_norm_q.single_cond_layer_norm.weight',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderksingle_cond_layer_norm': {
             'split': 'XXX',
-            'scale': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.layer_norm_k.single_cond_layer_norm.weight',
+            'scale': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.layer_norm_k.single_cond_layer_norm.weight',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderqsingle_cond_scale': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.layer_norm_q.single_cond_scale.weight',
-            'bias': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.layer_norm_q.single_cond_scale.bias',
+            'weights': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.layer_norm_q.single_cond_scale.weight',
+            'bias': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.layer_norm_q.single_cond_scale.bias',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderksingle_cond_scale': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.layer_norm_k.single_cond_scale.weight',
-            'bias': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.layer_norm_k.single_cond_scale.bias',
+            'weights': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.layer_norm_k.single_cond_scale.weight',
+            'bias': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.layer_norm_k.single_cond_scale.bias',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderqsingle_cond_bias': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.layer_norm_q.single_cond_bias.weight',
+            'weights': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.layer_norm_q.single_cond_bias.weight',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderksingle_cond_bias': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.layer_norm_k.single_cond_bias.weight',
+            'weights': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.layer_norm_k.single_cond_bias.weight',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderq_projection': {
             'split': 'XXX',
             'flatten': (-2, -1),
-            'weights': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.linear_q.weight',
-            'bias': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.linear_q.bias',
+            'weights': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.linear_q.weight',
+            'bias': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.linear_q.bias',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderk_projection': {
             'split': 'XXX',
             'flatten': (-2, -1),
-            'weights': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.linear_k.weight',
+            'weights': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.linear_k.weight',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderv_projection': {
             'split': 'XXX',
             'flatten': (-2, -1),
-            'weights': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.linear_v.weight',
+            'weights': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.linear_v.weight',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encodergating_query': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.linear_g.weight',
+            'weights': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.linear_g.weight',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encodertransition2': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.ada_zero_init.linear_transition.weight',
+            'weights': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.linear_out.weight',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderadaptive_zero_cond': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.ada_zero_init.linear_cond.weight',
-            'bias': f'{pytorch_base}.atom_transformer.attn_blocks.XXX.ada_zero_init.linear_cond.bias',
+            'weights': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.linear_out_adaptive.weight',
+            'bias': f'{pytorch_base}.atom_transformer.att_pair_bias.XXX.linear_out_adaptive.bias',
         },
 
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderffw_single_cond_layer_norm': {
             'split': 'XXX',
-            'scale': f'{pytorch_base}.atom_transformer.transition_blocks.XXX.adaptive_layernorm.single_cond_layer_norm.weight',
+            'scale': f'{pytorch_base}.atom_transformer.cond_trans.XXX.adaptive_layernorm.single_cond_layer_norm.weight',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderffw_single_cond_scale': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.transition_blocks.XXX.adaptive_layernorm.single_cond_scale.weight',
-            'bias': f'{pytorch_base}.atom_transformer.transition_blocks.XXX.adaptive_layernorm.single_cond_scale.bias',
+            'weights': f'{pytorch_base}.atom_transformer.cond_trans.XXX.adaptive_layernorm.single_cond_scale.weight',
+            'bias': f'{pytorch_base}.atom_transformer.cond_trans.XXX.adaptive_layernorm.single_cond_scale.bias',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderffw_single_cond_bias': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.transition_blocks.XXX.adaptive_layernorm.single_cond_bias.weight',
+            'weights': f'{pytorch_base}.atom_transformer.cond_trans.XXX.adaptive_layernorm.single_cond_bias.weight',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderffw_transition1#X': {
             'split': 'XXX',
             'index': (slice(None), slice(256)),
-            'weights': f'{pytorch_base}.atom_transformer.transition_blocks.XXX.linear_a1.weight'
+            'weights': f'{pytorch_base}.atom_transformer.cond_trans.XXX.linear_a1.weight'
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderffw_transition1#Y': {
             'split': 'XXX',
             'index': (slice(None), slice(256, None)),
-            'weights': f'{pytorch_base}.atom_transformer.transition_blocks.XXX.linear_a2.weight'
+            'weights': f'{pytorch_base}.atom_transformer.cond_trans.XXX.linear_a2.weight'
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderffw_adaptive_zero_cond': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.transition_blocks.XXX.ada_zero_init.linear_cond.weight',
-            'bias': f'{pytorch_base}.atom_transformer.transition_blocks.XXX.ada_zero_init.linear_cond.bias',
+            'weights': f'{pytorch_base}.atom_transformer.cond_trans.XXX.ada_zero_init.linear_cond.weight',
+            'bias': f'{pytorch_base}.atom_transformer.cond_trans.XXX.ada_zero_init.linear_cond.bias',
         },
         f'{jax_base}/{jax_sub}_atom_transformer_encoder/__layer_stack_with_per_layer/{jax_sub}_atom_transformer_encoderffw_transition2': {
             'split': 'XXX',
-            'weights': f'{pytorch_base}.atom_transformer.transition_blocks.XXX.ada_zero_init.linear_transition.weight',
+            'weights': f'{pytorch_base}.atom_transformer.cond_trans.XXX.ada_zero_init.linear_transition.weight',
         },
         f'{jax_base}/{jax_sub}_project_atom_features_for_aggr': {
             'weights': f'{pytorch_base}.project_atom_features.weight',
@@ -1337,124 +1337,124 @@ name_map_atom_att_dec = {
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/pair_input_layer_norm': {
         # Shape: (3, 16)
         'split': 'XXX',
-        'scale': f'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.layer_norm_z{layer_norm_sparse_filler}.weight',
+        'scale': f'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.layer_norm_z{layer_norm_sparse_filler}.weight',
         # 'scale': 'diffusion_module.atom_att_dec.atom_transformer.pair_input_layer_norm.weight',
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/pair_logits_projection': {
         # Shape: (3, 16, 4)
         'split': 'XXX',
-        'weights': f'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.linear_b{linear_sparse_filler}.weight',
+        'weights': f'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.linear_b{linear_sparse_filler}.weight',
         # 'flatten': (-2, -1),
         # 'weights': 'diffusion_module.atom_att_dec.atom_transformer.pair_logits_projection.weight',
     },
 
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderqsingle_cond_layer_norm': {
         'split': 'XXX',
-        'scale': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.layer_norm_q.single_cond_layer_norm.weight',
+        'scale': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.layer_norm_q.single_cond_layer_norm.weight',
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderqsingle_cond_scale': {
         'split': 'XXX',
         # Shape: [3, 128, 128]
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.layer_norm_q.single_cond_scale.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.layer_norm_q.single_cond_scale.weight',
         # Shape: [3, 128]
-        'bias': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.layer_norm_q.single_cond_scale.bias',
+        'bias': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.layer_norm_q.single_cond_scale.bias',
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderqsingle_cond_bias': {
         'split': 'XXX',
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.layer_norm_q.single_cond_bias.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.layer_norm_q.single_cond_bias.weight',
     },
 
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderq_projection': {
         'split': 'XXX',
         'flatten': (-2, -1),
         # Shape: [3, 128, 4, 32]
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.linear_q.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.linear_q.weight',
         # Shape: [3, 4, 32]
-        'bias': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.linear_q.bias',
+        'bias': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.linear_q.bias',
     },
 
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderksingle_cond_layer_norm': {
         'split': 'XXX',
-        'scale': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.layer_norm_k.single_cond_layer_norm.weight',
+        'scale': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.layer_norm_k.single_cond_layer_norm.weight',
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderksingle_cond_scale': {
         'split': 'XXX',
         # Shape: [3, 128, 128]
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.layer_norm_k.single_cond_scale.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.layer_norm_k.single_cond_scale.weight',
         # Shape: [3, 128]
-        'bias': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.layer_norm_k.single_cond_scale.bias',
+        'bias': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.layer_norm_k.single_cond_scale.bias',
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderksingle_cond_bias': {
         'split': 'XXX',
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.layer_norm_k.single_cond_bias.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.layer_norm_k.single_cond_bias.weight',
     },
 
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderk_projection': {
         'split': 'XXX',
         'flatten': (-2, -1),
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.linear_k.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.linear_k.weight',
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderv_projection': {
         'split': 'XXX',
         'flatten': (-2, -1),
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.linear_v.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.linear_v.weight',
     },
 
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decodergating_query': {
         'split': 'XXX',
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.linear_g.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.linear_g.weight',
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decodertransition2': {
         'split': 'XXX',
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.ada_zero_init.linear_transition.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.linear_out.weight',
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderadaptive_zero_cond': {
         'split': 'XXX',
         # Shape: [3, 128, 128]
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.ada_zero_init.linear_cond.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.linear_out_adaptive.weight',
         # Shape: [3, 128]
-        'bias': 'diffusion_module.atom_att_dec.atom_transformer.attn_blocks.XXX.ada_zero_init.linear_cond.bias',
+        'bias': 'diffusion_module.atom_att_dec.atom_transformer.att_pair_bias.XXX.linear_out_adaptive.bias',
     },
 
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderffw_single_cond_layer_norm': {
         'split': 'XXX',
-        'scale': 'diffusion_module.atom_att_dec.atom_transformer.transition_blocks.XXX.adaptive_layernorm.single_cond_layer_norm.weight',
+        'scale': 'diffusion_module.atom_att_dec.atom_transformer.cond_trans.XXX.adaptive_layernorm.single_cond_layer_norm.weight',
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderffw_single_cond_scale': {
         'split': 'XXX',
         # Shape: [3, 128]
-        'bias': 'diffusion_module.atom_att_dec.atom_transformer.transition_blocks.XXX.adaptive_layernorm.single_cond_scale.bias',
+        'bias': 'diffusion_module.atom_att_dec.atom_transformer.cond_trans.XXX.adaptive_layernorm.single_cond_scale.bias',
         # Shape: [3, 128, 128]
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.transition_blocks.XXX.adaptive_layernorm.single_cond_scale.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.cond_trans.XXX.adaptive_layernorm.single_cond_scale.weight',
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderffw_single_cond_bias': {
         'split': 'XXX',
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.transition_blocks.XXX.adaptive_layernorm.single_cond_bias.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.cond_trans.XXX.adaptive_layernorm.single_cond_bias.weight',
     },
 
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderffw_transition1#X': {
         'split': 'XXX',
         # Shape: (3, 128, 512)
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.transition_blocks.XXX.linear_a1.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.cond_trans.XXX.linear_a1.weight',
         'index': (slice(None), slice(256)),
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderffw_transition1#Y': {
         'split': 'XXX',
         # Shape: (3, 128, 512)
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.transition_blocks.XXX.linear_a2.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.cond_trans.XXX.linear_a2.weight',
         'index': (slice(None), slice(256, None)),
     },
 
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderffw_transition2': {
         'split': 'XXX',
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.transition_blocks.XXX.ada_zero_init.linear_transition.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.cond_trans.XXX.ada_zero_init.linear_transition.weight',
     },
     'diffuser/~/diffusion_head/diffusion_atom_transformer_decoder/__layer_stack_with_per_layer/diffusion_atom_transformer_decoderffw_adaptive_zero_cond': {
         'split': 'XXX',
         # Shape: [3, 128]
-        'bias': 'diffusion_module.atom_att_dec.atom_transformer.transition_blocks.XXX.ada_zero_init.linear_cond.bias',
+        'bias': 'diffusion_module.atom_att_dec.atom_transformer.cond_trans.XXX.ada_zero_init.linear_cond.bias',
         # Shape: [3, 128, 128]
-        'weights': 'diffusion_module.atom_att_dec.atom_transformer.transition_blocks.XXX.ada_zero_init.linear_cond.weight',
+        'weights': 'diffusion_module.atom_att_dec.atom_transformer.cond_trans.XXX.ada_zero_init.linear_cond.weight',
     },
 
     # After Transformer Decoder
