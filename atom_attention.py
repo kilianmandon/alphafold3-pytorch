@@ -166,9 +166,9 @@ class AtomAttentionDecoder(nn.Module):
         return r
 
 class DiffusionTransformer(nn.Module):
-    def __init__(self, c_a, c_z, N_head, c_s, N_block, split_ada_qk=False):
+    def __init__(self, c_a, c_z, N_head, c_s, N_block, split_ada_qk=False, no_compilation=False):
         super().__init__()
-        self.att_pair_bias = nn.ModuleList([AttentionPairBias(c_a, c_z, N_head, c_s, adaptive=True, biased_layer_norm_z=False, split_ada_qk=split_ada_qk) for _ in range(N_block)])
+        self.att_pair_bias = nn.ModuleList([AttentionPairBias(c_a, c_z, N_head, c_s, adaptive=True, biased_layer_norm_z=False, split_ada_qk=split_ada_qk, no_compilation=no_compilation) for _ in range(N_block)])
         self.cond_trans = nn.ModuleList([ConditionedTransitionBlock(c_a, c_s) for _ in range(N_block)])
         self.N_block = N_block
 

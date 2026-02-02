@@ -39,7 +39,7 @@ class AdaptiveZeroInit(nn.Module):
 
 
 class AttentionPairBias(nn.Module):
-    def __init__(self, c_a, c_z, N_head, c_s=None, adaptive=False, biased_layer_norm_z=True, split_ada_qk=False):
+    def __init__(self, c_a, c_z, N_head, c_s=None, adaptive=False, biased_layer_norm_z=True, split_ada_qk=False, no_compilation=False):
         super().__init__()
         c = c_a//N_head
         if adaptive:
@@ -62,7 +62,7 @@ class AttentionPairBias(nn.Module):
         self.linear_g = nn.Linear(c_a, c*N_head, bias=False)
         self.linear_out = nn.Linear(c*N_head, c_a, bias=False)
 
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and not no_compilation:
             self.flex_attention = torch.compile(flex_attention)
         else:
             self.flex_attention = flex_attention

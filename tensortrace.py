@@ -163,7 +163,7 @@ class TensorTrace:
         if masks[0] is None:
             return tensors, None
         
-        masks = np.stack(masks, axis=0).reshape(stack_shape + masks[0].shape)
+        masks = np.stack(masks, axis=0).reshape(stack_shape + list(masks[0].shape))
         masks = _from_numpy(masks, self.framework)
         return tensors, masks
 

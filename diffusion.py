@@ -1,4 +1,5 @@
 from torch.nn.attention.flex_attention import BlockMask
+import tensortrace as ttr
 from torch import nn
 import torch
 import tqdm
@@ -15,7 +16,7 @@ class DiffusionModule(nn.Module):
         super().__init__()
         self.diffusion_conditioning = DiffusionConditioning(sigma_data)
         self.atom_att_enc = AtomAttentionEncoder(c_s, c_z, use_trunk=True, c_token=c_a)
-        self.diffusion_transformer = DiffusionTransformer(c_a, c_z, N_head=16, c_s=c_s, N_block=24)
+        self.diffusion_transformer = DiffusionTransformer(c_a, c_z, N_head=16, c_s=c_s, N_block=24, no_compilation=True)
         self.atom_att_dec = AtomAttentionDecoder(c_a, c_atom)
 
         self.layer_norm_s = nn.LayerNorm(c_s, bias=False)
@@ -168,7 +169,7 @@ class DiffusionSampler(nn.Module):
                 noise = self.noise_scale * torch.sqrt(t_hat**2 - c_prev**2) * torch.randn(x_shape, device=device)
 
             x_noisy = x+noise
-            x_denoised = diffusion_module.forward(x_noisy, t_hat, s_inputs, s_trunk, z_trunk, rel_enc, ref_struct, mask)
+            x_denoised = diffusion_module.forward(x_noisy, t_hat, s_inputs, s_trunk, z_trunk, rel_enc, batch)
 
 
             delta = (x_noisy-x_denoised)/t_hat
