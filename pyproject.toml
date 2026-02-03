@@ -14,4 +14,8 @@ dependencies = [
     "atomworks[ml]>=2.2.0",
     "dotenv>=0.9.9",
     "ipykernel>=7.1.0",
+    "lightning>=2.6.1",
+    "diffusers[torch]>=0.36.0",
+    "torchvision>=0.22.1",
+    "wandb>=0.24.1",
 ]

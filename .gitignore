@@ -10,6 +10,7 @@ __pycache__
 data/ccd
 data/pdb_metadata
 data/pdb_mirror
+data/datasets
 
 uv.lock
 
