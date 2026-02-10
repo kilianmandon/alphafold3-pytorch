@@ -21,6 +21,8 @@ uv.lock
 *.tfstate
 *.tfstate.*
 
+.env
+
 # Crash log files
 crash.log
 crash.*.log

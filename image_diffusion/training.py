@@ -1,6 +1,11 @@
+import argparse
+from gc import callbacks
 import math
+from attr import dataclass
 import lightning as L
+from tqdm import tqdm
 import wandb
+import matplotlib.pyplot as plt
 import torch
 from torch.nn import functional as F
 from diffusers import UNet2DModel
@@ -9,6 +14,31 @@ from torchvision.datasets import CIFAR10
 import torchvision
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.utilities import grad_norm
+import yaml
+
+@dataclass
+class Config:
+    # Diffusion hyperparameters
+    sigma_data: float = 0.5
+    sigma_min: float = 0.002
+    sigma_max: float = 80.0
+    P_mean: float = -1.2
+    P_std: float = 1.2
+
+    # Sampler hyperparameters
+    gamma_0: float = 0.8
+    gamma_min: float = 1.0
+    noise_scale: float = 1.003
+    step_scale: float = 1.0
+    noise_steps: int = 50
+
+    # Training parameters
+    batch_size: int = 128
+    num_epochs: int = 40
+    learning_rate: float = 1e-4
+    learning_rate_warmup: bool = True
+    learning_rate_warmup_steps: int = 500
+    continue_from_checkpoint: str = None
 
 class ImageDiffusionModule(nn.Module):
     def __init__(self, sigma_data=0.5):
@@ -55,7 +85,7 @@ class ImageDiffusionSampler(nn.Module):
 
         x = noise_levels[0] * torch.randn(x_shape, device=device)
 
-        for c_prev, c in zip(noise_levels[:-1], noise_levels[1:]):
+        for c_prev, c in tqdm(zip(noise_levels[:-1], noise_levels[1:])):
 
             gamma = self.gamma_0 if c > self.gamma_min else 0
             t_hat = c_prev * (gamma + 1)
@@ -74,15 +104,16 @@ class ImageDiffusionSampler(nn.Module):
 
         
 class PLImageDiffusionModule(L.LightningModule):
-    def __init__(self, sigma_data=0.5, sigma_min=0.002, sigma_max=80.0, P_mean=-1.2, P_std=1.2):
+    def __init__(self, config: Config):
         super().__init__()
-        self.model = ImageDiffusionModule(sigma_data=sigma_data)
-        self.sigma_data = sigma_data
-        self.sigma_min = sigma_min
-        self.sigma_max = sigma_max
-        self.P_mean = P_mean - math.log(sigma_data)
-        self.P_std = P_std
-        self.diffusion_sampler = ImageDiffusionSampler(noise_steps=50)
+        self.config = config
+        self.model = ImageDiffusionModule(sigma_data=config.sigma_data)
+        self.sigma_data = config.sigma_data
+        self.sigma_min = config.sigma_min
+        self.sigma_max = config.sigma_max
+        self.P_mean = config.P_mean - math.log(config.sigma_data)
+        self.P_std = config.P_std
+        self.diffusion_sampler = ImageDiffusionSampler(noise_steps=config.noise_steps)
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -141,20 +172,48 @@ class PLImageDiffusionModule(L.LightningModule):
         
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=1e-4)
+        optimizer = optim.Adam(self.parameters(), lr=self.config.learning_rate)
+
+        if self.config.learning_rate_warmup:
+            lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: min((step+1)/self.config.learning_rate_warmup_steps, 1.0))
+            lr_scheduler_config = {
+                'scheduler': lr_scheduler,
+                'interval': 'step',
+            }
+
+            return [optimizer], [lr_scheduler_config]
+
         return optimizer
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default='data/configs/config.yaml')
+    args = parser.parse_args()
+    
+    # Load config
+    with open(args.config, 'r') as f:
+        config_dict = yaml.safe_load(f)
+    
+    config = Config(**config_dict['config'])
     T = torchvision.transforms.Compose([
         torchvision.transforms.ToTensor(),
         torchvision.transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ])
+
     dataset = CIFAR10('data/datasets/', download=True, transform=T)
 
-    train_loader = torch.utils.data.DataLoader(dataset, batch_size=128, shuffle=True, num_workers=16)
+    train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, shuffle=True, num_workers=16)
     wandb_logger = WandbLogger(project='image-diffusion')
-    trainer = L.Trainer(max_epochs=20, logger=wandb_logger)
-    model = PLImageDiffusionModule()
+    
+    if config.continue_from_checkpoint is not None:
+        model = PLImageDiffusionModule.load_from_checkpoint(config.continue_from_checkpoint)
+    else:
+        model = PLImageDiffusionModule(config)
+
+    checkpoint_callback = L.pytorch.callbacks.ModelCheckpoint(dirpath="image_diffusion/checkpoints", save_last=True)
+    lr_monitor = L.pytorch.callbacks.LearningRateMonitor(logging_interval='step')
+
+    trainer = L.Trainer(max_epochs=config.num_epochs, logger=wandb_logger, default_root_dir="image_diffusion/checkpoints", callbacks=[checkpoint_callback, lr_monitor])
     trainer.fit(model, train_dataloaders=train_loader)
 
 
