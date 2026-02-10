@@ -46,7 +46,7 @@ def ensure_ssh_master(instance_data):
     control_path = f"/tmp/vastai_ssh_{instance_data['id']}"
 
     # Check if master is already running
-    check_cmd = f'ssh -O check -o ControlPath={control_path} root@{instance_data["ssh_host"]} 2>/dev/null'
+    check_cmd = f'ssh -O check -o ControlPath={control_path} -o StrictHostKeyChecking=no root@{instance_data["ssh_host"]} 2>/dev/null'
     result = subprocess.run(check_cmd, shell=True, capture_output=True)
     
     if result.returncode == 0:
@@ -55,7 +55,7 @@ def ensure_ssh_master(instance_data):
     ssh_identify_file = '~/.ssh/id_vastai'
 
     ssh_opts = (
-        f"-i {ssh_identify_file}"
+        f"-i {ssh_identify_file} "
         f"-p {instance_data['ssh_port']} "
         f"-o ControlMaster=yes "
         f"-o ControlPersist=10m "
@@ -65,12 +65,19 @@ def ensure_ssh_master(instance_data):
     cmd = f'ssh {ssh_opts} -fN root@{instance_data["ssh_host"]}'
     timeout = 30
     start_time = time.time()
+    retry_started = False
     while time.time() - start_time < timeout:
         try:
             subprocess.run(cmd, shell=True, check=True)
+            if retry_started:
+                print('')
             return
         except subprocess.CalledProcessError as e:
-            print(f"SSH master setup failed: {e}. Retrying...")
+            if not retry_started:
+                print(f"SSH master setup failed: {e}. Retrying...", end='')
+                retry_started = True
+            else:
+                print('.', end='', flush=True)
             time.sleep(5)
             continue
 

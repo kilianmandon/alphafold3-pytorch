@@ -1,11 +1,9 @@
 import argparse
-from gc import callbacks
 import math
 from attr import dataclass
 import lightning as L
 from tqdm import tqdm
 import wandb
-import matplotlib.pyplot as plt
 import torch
 from torch.nn import functional as F
 from diffusers import UNet2DModel
