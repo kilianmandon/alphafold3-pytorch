@@ -5,7 +5,7 @@ import time
 from dotenv import load_dotenv
 from vastai_sdk import VastAI
 
-def select_offer(vast_sdk, num_gpus=4, top_k=10):
+def select_offer(vast_sdk, num_gpus=4, top_k=20):
     offers = vast_sdk.search_offers(query=f'num_gpus={num_gpus} rented=False rentable=True')
     offers = offers[:top_k]
 
@@ -18,9 +18,14 @@ def select_offer(vast_sdk, num_gpus=4, top_k=10):
     geolocations = [v["geolocation"] for v in offers]
     max_len_geolocations = max([len(g) for g in geolocations])
 
+    inet_up = [f'{v["inet_up"]/1000:.1f} Gbps' for v in offers]
+    max_len_inet_up = max([len(i) for i in inet_up])
+    inet_down = [f'{v["inet_down"]/1000:.1f} Gbps' for v in offers]
+    max_len_inet_down = max([len(i) for i in inet_down])
+
     for i, v in enumerate(offers):
         idx_str = f'({i+1})'
-        print(f'{idx_str:>4} {v["gpu_name"]:{max_len_graphiucs_cards}} - {prices[i]:>{max_len_prices}} - {gpu_rams[i]:>{max_len_gpu_rams}} - {geolocations[i]:<{max_len_geolocations}}')
+        print(f'{idx_str:>4} {v["gpu_name"]:{max_len_graphiucs_cards}} - {prices[i]:>{max_len_prices}} - {gpu_rams[i]:>{max_len_gpu_rams}} - {inet_up[i]:>{max_len_inet_up}} - {inet_down[i]:>{max_len_inet_down}} - {geolocations[i]:<{max_len_geolocations}}')
 
     offer_idx = int(input('Select offer: ')) - 1
     return offers[offer_idx]
@@ -31,7 +36,7 @@ def wait_for_online(vast_sdk, instance_id, timeout=300):
     print('Loading...', end='')
     while time.time() - start_time < timeout:
         data = vast_sdk.show_instance(id=instance_id)
-        if data['actual_status'] == 'loading':
+        if data['actual_status'] in ['loading', 'created']:
             print('.', end='', flush=True)
             time.sleep(3)
         elif data['actual_status'] == 'running':
@@ -63,7 +68,7 @@ def ensure_ssh_master(instance_data):
         f"-o StrictHostKeyChecking=no"
     )
     cmd = f'ssh {ssh_opts} -fN root@{instance_data["ssh_host"]}'
-    timeout = 30
+    timeout = 60
     start_time = time.time()
     retry_started = False
     while time.time() - start_time < timeout:
@@ -124,7 +129,7 @@ def main():
     instance_data = vast_sdk.show_instance(id=instance_id)
 
     print('Instance created, uploading files...')
-    config_name = 'config.yaml'
+    config_name = 'config_lr_5e-4.yaml'
     upload_file(f'data/configs/{config_name}', f'/workspace/{config_name}', instance_data, vast_sdk)
     upload_file('cloud_infrastructure/vastai/startup_script.sh', '/workspace/startup_script.sh', instance_data, vast_sdk)
 

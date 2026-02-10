@@ -2,6 +2,7 @@ import argparse
 import math
 from attr import dataclass
 import lightning as L
+from matplotlib import pyplot as plt
 from tqdm import tqdm
 import wandb
 import torch
@@ -71,31 +72,63 @@ class ImageDiffusionSampler(nn.Module):
         self.step_scale = step_scale
 
 
-    def noise_schedule(self, t, p=7):
+    def noise_schedule(self, t, p=7, append_zero=False):
         sigma_min=0.002
         sigma_max=80.0
-        return (sigma_max ** (1/p) + t * (sigma_min**(1/p) - sigma_max**(1/p))) ** p
+        schedule = (sigma_max ** (1/p) + t * (sigma_min**(1/p) - sigma_max**(1/p))) ** p
+        if append_zero:
+            schedule = torch.cat([schedule, torch.zeros(1, device=schedule.device)])
+        return schedule
 
-    def forward(self, diffusion_module, n_classes):
+    def first_order_step(self, x, y, c_prev, c):
+        x_denoised = self.diffusion_module(x, c_prev, y)
+        delta = (x-x_denoised) / c_prev
+        dt = c-c_prev
+        x_next = x + dt * delta
+        return x_next
+
+    def second_order_step(self, x, y, c_prev, c):
+        x_denoised = self.diffusion_module(x, c_prev, y)
+        delta = (x-x_denoised) / c_prev
+        dt = c - c_prev
+        x_next = x + dt * delta
+
+        if c > 0:
+            x_prime_denoised = self.diffusion_module(x_next, c, y)
+            delta_prime = (x_next - x_prime_denoised) / c
+            x_next = x + 0.5 * dt * (delta + delta_prime)
+        return x_next
+
+    def stochastic_solver_step(self, x, y, c_prev, c):
+        gamma = self.gamma_0 if c > self.gamma_min else 0
+        t_hat = c_prev * (gamma + 1)
+        noise = self.noise_scale * torch.sqrt(t_hat**2 - c_prev**2) * torch.randn_like(x)
+        x_noisy = x + noise
+        x_next = self.first_order_step(x_noisy, y, t_hat, c)
+        return x_next
+
+    def forward(self, diffusion_module, n_classes, solver='second_order'):
         device = diffusion_module.unet.device
-        noise_levels = self.noise_schedule(torch.linspace(0, 1, self.noise_steps+1, device=device))
-        x_shape = (n_classes, 3, 32, 32)
+        if solver == 'second_order': 
+            noise_steps = self.noise_steps // 2
+        else:
+            noise_steps = self.noise_steps
 
+        noise_levels = self.noise_schedule(torch.linspace(0, 1, noise_steps, device=device), append_zero=True)
+        x_shape = (n_classes, 3, 32, 32)
         x = noise_levels[0] * torch.randn(x_shape, device=device)
 
+        y = torch.arange(n_classes, device=device)
         for c_prev, c in tqdm(zip(noise_levels[:-1], noise_levels[1:])):
-
-            gamma = self.gamma_0 if c > self.gamma_min else 0
-            t_hat = c_prev * (gamma + 1)
-
-            noise = self.noise_scale * torch.sqrt(t_hat**2 - c_prev**2) * torch.randn(x_shape, device=device)
-
-            x_noisy = x+noise
-            x_denoised = diffusion_module(x_noisy, t_hat, torch.arange(n_classes, device=device))
-
-            delta = (x_noisy-x_denoised)/t_hat
-            dt = c - t_hat
-            x = x_noisy + self.step_scale * dt * delta
+            if solver == 'first_order':
+                x = self.first_order_step(x, y, c_prev, c)
+            elif solver == 'second_order':
+                x = self.second_order_step(x, y, c_prev, c)
+            elif solver == 'stochastic_solver':
+                x = self.stochastic_solver_step(x, y, c_prev, c)
+            else:
+                raise ValueError(f"Unknown solver: {solver}")
+            
 
         return x * 0.5 + 0.5
 
@@ -182,6 +215,16 @@ class PLImageDiffusionModule(L.LightningModule):
             return [optimizer], [lr_scheduler_config]
 
         return optimizer
+
+def sample_test_images(diffusion_sampler, model, solver='second_order'):
+    model.eval()
+    with torch.no_grad():
+        sampled_images = diffusion_sampler(model, n_classes=10, solver=solver)
+    sampled_images = torch.clamp(sampled_images, 0, 1).cpu()
+    grid = torchvision.utils.make_grid(sampled_images, nrow=5)
+    plt.imshow(grid.permute(1, 2, 0))
+    plt.axis('off')
+    plt.show()
 
 def main():
     parser = argparse.ArgumentParser()

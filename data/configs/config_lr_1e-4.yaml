@@ -1,0 +1,22 @@
+config:
+  # Diffusion hyperparameters
+  sigma_data: 0.5
+  sigma_min: 0.002
+  sigma_max: 80.0
+  P_mean: -1.2
+  P_std: 1.2
+
+  # Sampler hyperparameters
+  gamma_0: 0.8
+  gamma_min: 1.0
+  noise_scale: 1.003
+  step_scale: 1.0
+  noise_steps: 50
+
+  # Training parameters
+  batch_size: 128
+  num_epochs: 100
+  learning_rate: 1.0e-4
+  learning_rate_warmup: true
+  learning_rate_warmup_steps: 500
+  continue_from_checkpoint: null

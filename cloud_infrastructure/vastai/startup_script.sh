@@ -10,10 +10,14 @@ cd alphafold3-pytorch
 
 uv sync
 
-.venv/bin/python image_diffusion/training.py --config $config_path
+uv pip install --upgrade 'torch>=2.9'
+uv pip install --upgrade torchvision
+uv pip install --upgrade lightning
+
+.venv/bin/python image_diffusion/training.py --config "$config_path" 2>&1 | tee training.log
 
 # upload latest checkpoint to DO space
 filename="diffusion_$(date +'%Y-%m-%d_%H-%M-%S').ckpt"
 s5cmd --endpoint-url https://af3-data.tor1.digitaloceanspaces.com cp image_diffusion/checkpoints/last.ckpt s3://data/checkpoints/$filename
 
-# vastai destroy instance $instance_id
+vastai destroy instance $instance_id

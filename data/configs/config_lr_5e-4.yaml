@@ -15,8 +15,8 @@ config:
 
   # Training parameters
   batch_size: 128
-  num_epochs: 40
-  learning_rate: 1.0e-4
+  num_epochs: 400
+  learning_rate: 5.0e-4
   learning_rate_warmup: true
-  learning_rate_warmup_steps: 500
+  learning_rate_warmup_steps: 2000
   continue_from_checkpoint: null
