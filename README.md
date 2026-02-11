@@ -89,6 +89,8 @@ def main():
         f.write(mmcif_string)
 ```
 
+## License
+Currently includes code from the EDM implementation in image_diffusion, which is licensed under Creative Commons. The rest of the code is licensed under MIT License.
 
 ## Citation
 

@@ -2,7 +2,7 @@
 name = "alphafold3-pytorch"
 version = "0.1.0"
 description = "Environment for a custom AlphaFold 3 implementation."
-requires-python = ">=3.12"
+requires-python = "==3.12"
 
 dependencies = [
     "torch", # pytorch

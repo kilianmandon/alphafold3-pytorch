@@ -15,6 +15,8 @@ from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.utilities import grad_norm
 import yaml
 
+from training.networks import EDMPrecond
+
 @dataclass
 class Config:
     # Diffusion hyperparameters
@@ -38,6 +40,8 @@ class Config:
     learning_rate_warmup: bool = True
     learning_rate_warmup_steps: int = 500
     continue_from_checkpoint: str = None
+
+    model_type: str = 'HuggingFaceUNet'
 
 class ImageDiffusionModule(nn.Module):
     def __init__(self, sigma_data=0.5):
@@ -108,17 +112,20 @@ class ImageDiffusionSampler(nn.Module):
         return x_next
 
     def forward(self, diffusion_module, n_classes, solver='second_order'):
-        device = diffusion_module.unet.device
+        device = 'cuda'
         if solver == 'second_order': 
             noise_steps = self.noise_steps // 2
         else:
             noise_steps = self.noise_steps
 
         noise_levels = self.noise_schedule(torch.linspace(0, 1, noise_steps, device=device), append_zero=True)
-        x_shape = (n_classes, 3, 32, 32)
+        x_shape = (25, 3, 32, 32)
         x = noise_levels[0] * torch.randn(x_shape, device=device)
 
-        y = torch.arange(n_classes, device=device)
+        y = torch.randint(n_classes, (25,), device=device)
+        if isinstance(diffusion_module, EDMPrecond):
+            y = nn.functional.one_hot(y, num_classes=n_classes).float().to(device)
+
         for c_prev, c in tqdm(zip(noise_levels[:-1], noise_levels[1:])):
             if solver == 'first_order':
                 x = self.first_order_step(diffusion_module, x, y, c_prev, c)
@@ -140,7 +147,11 @@ class PLImageDiffusionModule(L.LightningModule):
         if config is None:
             config = Config()
         self.config = config
-        self.model = ImageDiffusionModule(sigma_data=config.sigma_data)
+        if config.model_type == 'HuggingFaceUNet':
+            self.model = ImageDiffusionModule(sigma_data=config.sigma_data)
+        elif config.model_type == 'EDMPrecond':
+            self.model = EDMPrecond(model_type='SongUNet', embedding_type='positional', encoder_type='standard', decoder_type='standard', channel_mult_noise=1, resample_filter=[1,1], model_channels=128, channel_mult=[2,2,2], img_resolution=32, img_channels=3, label_dim=10)
+            
         self.sigma_data = config.sigma_data
         self.sigma_min = config.sigma_min
         self.sigma_max = config.sigma_max
@@ -150,6 +161,8 @@ class PLImageDiffusionModule(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x, y = batch
+        if self.config.model_type == 'EDMPrecond':
+            y = nn.functional.one_hot(y, num_classes=10).float().to(x.device)
 
         t_hat = self.sigma_data * torch.exp(torch.randn(x.size(0), device=x.device) * self.P_std + self.P_mean)
 
@@ -223,7 +236,7 @@ def sample_test_images(diffusion_sampler, model, solver='second_order'):
     with torch.no_grad():
         sampled_images = diffusion_sampler(model, n_classes=10, solver=solver)
     sampled_images = torch.clamp(sampled_images, 0, 1).cpu()
-    grid = torchvision.utils.make_grid(sampled_images, nrow=5)
+    grid = torchvision.utils.make_grid(sampled_images, nrow=8)
     plt.imshow(grid.permute(1, 2, 0))
     plt.axis('off')
     plt.savefig(f"test_samples_{solver}.png")
@@ -263,11 +276,14 @@ def main():
     train()
 
     # print('Loading model...')
-    # model = PLImageDiffusionModule.load_from_checkpoint("last_ckpt.ckpt", )
+    # model = PLImageDiffusionModule.load_from_checkpoint("checkpoint.ckpt", )
+    # model = EDMPrecond(model_type='SongUNet', embedding_type='positional', encoder_type='standard', decoder_type='standard', channel_mult_noise=1, resample_filter=[1,1], model_channels=128, channel_mult=[2,2,2], img_resolution=32, img_channels=3, label_dim=10)
+    # model.load_state_dict(torch.load('image_diffusion/vp_precond.pth'), strict=False)
+    # model.to('cuda')
     # sampler = ImageDiffusionSampler(noise_steps=100)
     # print('Sampling images...')
     # for solver in ['first_order', 'second_order', 'stochastic_solver']:
-    #     sample_test_images(sampler, model.model, solver=solver)
+    #     sample_test_images(sampler, model, solver=solver)
     # print('Done.')
 
 
