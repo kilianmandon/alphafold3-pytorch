@@ -73,7 +73,7 @@ class InputEmbedder(nn.Module):
         token_dist[~(same_chain & same_residue)] = 2*rmax+1
 
         chain_dist = torch.clip(left_sym_id-right_sym_id+smax, 0, 2*smax)
-        chain_dist[~same_chain] = 2*smax+1
+        chain_dist[~same_entity] = 2*smax+1
 
         a_rel_pos = F.one_hot(residue_dist, 2*rmax+2)
         a_rel_token = F.one_hot(token_dist, 2*rmax+2)

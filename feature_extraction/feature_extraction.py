@@ -130,23 +130,17 @@ class HotfixFillRefSpaceUID(Transform):
 
 
 def custom_af3_pipeline(n_recycling_iterations, msa_shuffle_orders=None):
-    # msa_shuffle_orders = np.stack([
-    #     torch.load(f'/Users/kilianmandon/Projects/alphafold3/kilian/feature_extraction/test_outputs_lysozyme/rec_{i}_msa_shuffle_order.pt', weights_only=False).long().numpy()
-    #     for i in range(2)], axis=0)
     transforms = [
         RemoveHydrogens(),
         HotfixDropSaccharideO1(),
-        # RemoveTerminalOxygen(),
         AtomizeByCCDName(
             atomize_by_default=True,
             res_names_to_ignore=STANDARD_AA + STANDARD_RNA + STANDARD_DNA,
         ),
         CalculateTokenFeatures(),
         CalculateRefStructFeatures(),
-        # HotfixFillRefSpaceUID(),
         CalculateMSAFeatures(msa_shuffle_orders=msa_shuffle_orders, n_recycling_iterations=n_recycling_iterations),
         CalculateContactMatrix(),
-        # ExpandBatchDimension(),
     ]
 
     return Compose(transforms)

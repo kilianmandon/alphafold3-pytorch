@@ -1,5 +1,6 @@
 import math
 import time
+import numpy as np
 import torch
 from feature_extraction.feature_extraction import Batch, custom_af3_pipeline, load_input, tree_map
 import utils
@@ -36,7 +37,7 @@ def to_float(tensor):
     return tensor.float()
 
 
-def main():
+def main(test_name):
     msa_shuffle_order = torch.stack(ttr.load_all('evoformer/msa_shuffle_order'), dim=0)
 
     model = Model(N_cycle=2, noise_steps=4)
@@ -44,7 +45,7 @@ def main():
     model.load_state_dict(params)
 
     t1 = time.time()
-    data = load_input('data/fold_inputs/fold_input_lysozyme.json')
+    data = load_input(f'data/fold_inputs/fold_input_{test_name}.json')
     transform = custom_af3_pipeline(n_recycling_iterations=2, msa_shuffle_orders=msa_shuffle_order)
 
     data = transform.forward(data)
@@ -52,9 +53,30 @@ def main():
 
     batch = tree_map(lambda x: torch.tensor(x), batch)
 
-    batch.ref_struct.positions = batch.ref_struct.to_atom_layout(ttr.load('ref_structure/positions'))
+    hotfix_roll_parts = []
+
+    if test_name == 'protein_dna_ion':
+        hotfix_roll_parts = [slice(301, 326), slice(327, 352)]
+    elif test_name == 'protein_rna_ion':
+        hotfix_roll_parts = [slice(1, 75)]
+
+    def hotfix_roll(x, shifts=1):
+        x = x.clone()
+        for part in hotfix_roll_parts:
+            x[part] = torch.roll(x[part], shifts=shifts, dims=1)
+        return x
+
+    def hotfix_roll_inv(x):
+        return hotfix_roll(x, shifts=-1)
+
+    debug_positions = ttr.load('ref_structure/positions')
+    debug_positions = hotfix_roll(debug_positions, shifts=-1)
+
+    batch.ref_struct.positions = batch.ref_struct.to_atom_layout(debug_positions)
 
     print(f'Featurization took {time.time()-t1:.1f} seconds.')
+
+
 
     ttr.compare({
         'mask': batch.ref_struct.mask,
@@ -62,7 +84,7 @@ def main():
         'element': batch.ref_struct.element,
         'atom_name_chars': batch.ref_struct.atom_name_chars,
         'ref_space_uid': batch.ref_struct.ref_space_uid,
-    }, 'ref_structure', use_mask={'mask': False }, input_processing=[lambda x: batch.ref_struct.to_token_layout(x)])
+    }, 'ref_structure', use_mask={'mask': False }, input_processing=[lambda x: batch.ref_struct.to_token_layout(x), hotfix_roll])
 
     token_feats = {
         'asym_id': batch.token_features.asym_id,
@@ -71,6 +93,8 @@ def main():
         'is_dna': batch.token_features.is_dna,
         'is_rna': batch.token_features.is_rna,
         'is_protein': batch.token_features.is_protein,
+        'residue_index': batch.token_features.residue_index,
+        'token_index': batch.token_features.token_index,
         'mask': batch.token_features.mask,
     }
     ttr.compare(token_feats, 'token_features', use_mask={'mask': False})
@@ -108,8 +132,8 @@ def main():
 
 
     diffusion_randomness = {
-        'init_pos': ttr.load('diffusion/initial_positions', processing=[to_device, indexing(0), t2q, to_float]),
-        'noise': ttr.load_all('diffusion/noise', processing=[to_device, indexing(0), t2q, to_float]),
+        'init_pos': ttr.load('diffusion/initial_positions', processing=[to_device, indexing(0), hotfix_roll_inv, t2q, to_float]),
+        'noise': ttr.load_all('diffusion/noise', processing=[to_device, indexing(0), hotfix_roll_inv, t2q, to_float]),
         'aug_rot': ttr.load_all('diffusion/rand_aug/rot', processing=[indexing(0), to_device, to_float]),
         'aug_trans': ttr.load_all('diffusion/rand_aug/trans', processing=[indexing(0), to_device, to_float]),
     }
@@ -121,9 +145,10 @@ def main():
 
     diff_x = batch.ref_struct.to_token_layout(diff_x)
 
-    ttr.compare(diff_x, 'diffusion/final_positions', processing=[indexing(0)])
+    ttr.compare(diff_x, 'diffusion/final_positions', processing=[indexing(0), hotfix_roll_inv])
 
 
 if __name__=='__main__':
-    with torch.no_grad(), ttr.TensorTrace('lysozyme_trace', mode='read', framework='pytorch'):
-        main()
+    test_name = 'lysozyme'
+    with torch.no_grad(), ttr.TensorTrace(f'data/tensortraces/{test_name}_trace', mode='read', framework='pytorch'):
+        main(test_name)

@@ -45,7 +45,7 @@ class Evoformer(nn.Module):
         N_token = msa_features.target_feat.shape[-2]
         device = msa_features.target_feat.device
 
-        s_input, s_init, z_init, rel_enc = self.input_embedder(batch)
+        s_input, s_init, z_init, rel_feat = self.input_embedder(batch)
 
         prev_s = torch.zeros(batch_shape+(N_token, c_s), device=device, dtype=torch.float32)
         prev_z = torch.zeros(batch_shape+(N_token, N_token, c_z), device=device, dtype=torch.float32)
@@ -64,7 +64,7 @@ class Evoformer(nn.Module):
             s, z = self.pairformer(s, z, token_features)
             prev_s, prev_z = s, z
 
-        return s_input, s, z, rel_enc
+        return s_input, s, z, rel_feat
 
 
 class TemplateEmbedder(nn.Module):

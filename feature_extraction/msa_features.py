@@ -1,3 +1,4 @@
+import copy
 from dataclasses import dataclass, fields
 import numpy as np
 import torch
@@ -33,7 +34,8 @@ class HotfixDuplicateRowIfSingleMSA(Transform):
         ...
 
     def forward(self, data):
-        if len(data['polymer_msas_by_chain_id']) == 1:
+        msa_hashes = set([hash(v['msa'].tobytes()) for v in data['polymer_msas_by_chain_id'].values()])
+        if len(msa_hashes) == 1:
             msa_data = list(data['polymer_msas_by_chain_id'].values())[0]
             for k, v in msa_data.items():
                 new_shape = (v.shape[0]+1,) + v.shape[1:]
@@ -41,45 +43,14 @@ class HotfixDuplicateRowIfSingleMSA(Transform):
                 new_val[1:] = v
                 new_val[0] = v[0]
                 msa_data[k] = new_val
+
             msa_data['msa_is_padded_mask'][0] = True
 
-        return data
-
-class HotfixEncodeRNAAsProtein(Transform):
-    def forward(self, data):
-        is_rna = data['token_features'].is_rna
-        is_dna = data['token_features'].is_dna
-        is_nucleic = is_rna | is_dna
-
-        if np.all(~is_nucleic):
-            return data
-
-        for k in data['msa_features']:
-            if k == 'full_msa_mask':
-                continue
-            original_data = data['msa_features'][k][:, is_nucleic]
-            shifted = np.roll(original_data, 1, axis=0)
-            if k != 'individual_msa_mask':
-                shifted[0] = shifted[1]
-            data['msa_features'][k][:, is_nucleic] = shifted
-
-        msa_first_row = data['msa_features']['msa'][0, is_nucleic]
-        hotfix_map = {
-            i: i for i in range(32)
-        } | {
-            AF3_TOKENS_MAP['A']: AF3_TOKENS_MAP['ALA'],
-            AF3_TOKENS_MAP['C']: AF3_TOKENS_MAP['CYS'],
-            AF3_TOKENS_MAP['G']: AF3_TOKENS_MAP['GLY'],
-            AF3_TOKENS_MAP['U']: AF3_TOKENS_MAP['CYS'],
-            AF3_TOKENS_MAP['DA']: AF3_TOKENS_MAP['ALA'],
-            AF3_TOKENS_MAP['DC']: AF3_TOKENS_MAP['CYS'],
-            AF3_TOKENS_MAP['DG']: AF3_TOKENS_MAP['GLY'],
-            AF3_TOKENS_MAP['DT']: AF3_TOKENS_MAP['THR'],
-        }
-        msa_first_row = np.vectorize(hotfix_map.get)(msa_first_row)
-        data['msa_features']['msa'][0, is_nucleic] = msa_first_row
+            for k in data['polymer_msas_by_chain_id']:
+                data['polymer_msas_by_chain_id'][k] = copy.deepcopy(msa_data)
 
         return data
+
 
 class HotfixAF3LigandAsGap(Transform):
     def forward(self, data):
@@ -195,11 +166,6 @@ class EncodeMSAFeatures(Transform):
         msa_feat, msa_mask = self.sample_msa_features(full_msa_feat, full_msa_mask, self.msa_shuffle_orders)
         target_feat = self.calculate_target_feat(restype, profile, deletion_mean)
 
-        # data['msa_features']['msa_feat'] = msa_feat.astype(np.float32)
-        # data['msa_features']['msa_mask'] = msa_mask.astype(np.float32)
-        # data['msa_features']['target_feat'] = target_feat.astype(np.float32)
-        # data['msa_features']['profile'] = profile.astype(np.float32)
-
         data['msa_features'] = MSAFeatures(
             msa_feat.astype(np.float32),
             msa_mask.astype(np.float32),
@@ -248,7 +214,6 @@ class CalculateMSAFeatures(Transform):
             EncodeMSA(),
             # PairAndMergePolymerMSAs(dense=True),
             ConcatMSAs(max_msa_sequences=max_msa_sequences),
-            HotfixEncodeRNAAsProtein(),
             HotfixAF3LigandAsGap(),
             EncodeMSAFeatures(msa_trunc_count, msa_shuffle_orders, n_recycling_iterations)
         ])
